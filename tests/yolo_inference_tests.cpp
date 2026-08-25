@@ -1,4 +1,5 @@
 #include "manager/classification_inference.hpp"
+#include "manager/onnx_metadata.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <array>
@@ -150,6 +151,71 @@ void test_decodeClassificationOutput_rejectsWrongShape() {
     CHECK(threw);
 }
 
+void test_extractInputShape_valid() {
+    onnx::ModelProto model;
+    auto* input = model.mutable_graph()->add_input();
+    auto* shape = input->mutable_type()->mutable_tensor_type()->mutable_shape();
+    shape->add_dim()->set_dim_value(1);
+    shape->add_dim()->set_dim_value(3);
+    shape->add_dim()->set_dim_value(448);
+    shape->add_dim()->set_dim_value(576);
+
+    OnnxInputShape outShape;
+    std::string error;
+    CHECK(extractInputShape(model, outShape, error));
+    CHECK(outShape.channels == 3);
+    CHECK(outShape.height == 448);
+    CHECK(outShape.width == 576);
+}
+
+void test_extractInputShape_rejectsDynamicDim() {
+    onnx::ModelProto model;
+    auto* input = model.mutable_graph()->add_input();
+    auto* shape = input->mutable_type()->mutable_tensor_type()->mutable_shape();
+    shape->add_dim()->set_dim_param("batch");
+    shape->add_dim()->set_dim_value(3);
+    shape->add_dim()->set_dim_value(224);
+    shape->add_dim()->set_dim_value(224);
+
+    OnnxInputShape outShape;
+    std::string error;
+    CHECK(!extractInputShape(model, outShape, error));
+    CHECK(!error.empty());
+}
+
+void test_extractInputShape_rejectsNoInputs() {
+    onnx::ModelProto model;
+    OnnxInputShape outShape;
+    std::string error;
+    CHECK(!extractInputShape(model, outShape, error));
+}
+
+void test_extractClassNames_valid() {
+    onnx::ModelProto model;
+    auto* prop = model.add_metadata_props();
+    prop->set_key("names");
+    prop->set_value("{0: 'person', 1: 'car', 2: 'bike'}");
+
+    const auto names = extractClassNames(model);
+    CHECK(names.size() == 3);
+    CHECK(names[0] == "person");
+    CHECK(names[1] == "car");
+    CHECK(names[2] == "bike");
+}
+
+void test_extractClassNames_missingReturnsEmpty() {
+    onnx::ModelProto model;
+    CHECK(extractClassNames(model).empty());
+}
+
+void test_extractClassNames_malformedReturnsEmpty() {
+    onnx::ModelProto model;
+    auto* prop = model.add_metadata_props();
+    prop->set_key("names");
+    prop->set_value("not a dict at all");
+    CHECK(extractClassNames(model).empty());
+}
+
 } // namespace
 
 int main() {
@@ -163,6 +229,12 @@ int main() {
     test_decodeClassificationOutput_sortsDescending();
     test_decodeClassificationOutput_rejectsBadSum();
     test_decodeClassificationOutput_rejectsWrongShape();
+    test_extractInputShape_valid();
+    test_extractInputShape_rejectsDynamicDim();
+    test_extractInputShape_rejectsNoInputs();
+    test_extractClassNames_valid();
+    test_extractClassNames_missingReturnsEmpty();
+    test_extractClassNames_malformedReturnsEmpty();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
