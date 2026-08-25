@@ -1,10 +1,11 @@
 #pragma once
 
 #include "manager/onnx_metadata.hpp"
+#include "manager/onnx_runtime_env.hpp"
 
 #include <opencv2/core.hpp>
-#include <opencv2/dnn.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -94,16 +95,23 @@ public:
 
     bool isValid() const { return valid_; }
 
+    // True if this model's session is using the CUDA execution provider
+    // (only meaningful once isValid() is true).
+    bool isGpuActive() const { return gpuActive_; }
+
     // Runs letterbox -> forward pass -> decode on `frame` using this
     // model's loaded network. Returns an empty vector if the model isn't
     // valid or `frame` is empty.
     std::vector<Detection> infer(const cv::Mat& frame, float confThreshold, float nmsThreshold);
 
 private:
-    cv::dnn::Net net_;
+    std::unique_ptr<Ort::Session> session_;
+    std::string inputName_;
+    std::string outputName_;
     std::vector<std::string> classNames_;
     int inputWidth_ = 640;
     int inputHeight_ = 640;
     OnnxPreprocessingHints hints_;
+    bool gpuActive_ = false;
     bool valid_ = false;
 };

@@ -159,16 +159,18 @@ YoloModel::YoloModel(
     const OnnxPreprocessingHints& hints,
     std::string& errorOut)
     : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight), hints_(hints) {
-    try {
-        net_ = cv::dnn::readNetFromONNX(onnxPath);
-    } catch (const cv::Exception& e) {
-        errorOut = std::string("Failed to load ONNX model: ") + e.what();
+    OrtSessionResult result = createOrtSession(onnxPath);
+    if (!result.session) {
+        errorOut = result.error;
         return;
     }
-    if (net_.empty()) {
-        errorOut = "Failed to load ONNX model: empty network";
-        return;
-    }
+    session_ = std::move(result.session);
+    gpuActive_ = result.gpuActive;
+
+    Ort::AllocatorWithDefaultOptions allocator;
+    inputName_ = session_->GetInputNameAllocated(0, allocator).get();
+    outputName_ = session_->GetOutputNameAllocated(0, allocator).get();
+
     valid_ = true;
 }
 
@@ -181,16 +183,23 @@ std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshol
         frame.cols, frame.rows, inputWidth_, inputHeight_, hints_.padCenter);
     const cv::Mat letterboxed = letterboxResize(frame, inputWidth_, inputHeight_, transform, hints_.padFill);
 
-    cv::Mat blob = cv::dnn::blobFromImage(
-        letterboxed, hints_.inputScale, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
-    net_.setInput(blob);
-    cv::Mat rawOutput = net_.forward();
+    const std::vector<float> inputData = hwcBgrToNchwFloat(letterboxed, hints_.inputScale);
+    const std::vector<int64_t> inputShape = {1, 3, inputHeight_, inputWidth_};
+
+    Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+        memoryInfo, const_cast<float*>(inputData.data()), inputData.size(), inputShape.data(), inputShape.size());
+
+    const char* inputNames[] = {inputName_.c_str()};
+    const char* outputNames[] = {outputName_.c_str()};
+    std::vector<Ort::Value> outputs =
+        session_->Run(Ort::RunOptions{nullptr}, inputNames, &inputTensor, 1, outputNames, 1);
+
+    cv::Mat rawOutput = ortValueToMat(outputs.front());
 
     // Ultralytics v8/v11 export shape: [1, 4+numClasses, numBoxes]. Reject
     // anything else up front -- a classification/regression head or an
-    // end2end/NMS-baked export won't have this shape, and reading
-    // rawOutput.size[2] on a Mat with fewer than 3 dims is undefined
-    // behavior rather than a catchable error.
+    // end2end/NMS-baked export won't have this shape.
     if (rawOutput.dims != 3 || rawOutput.size[0] != 1) {
         CV_Error(cv::Error::StsError,
             "Unexpected model output shape (expected [1, 4+numClasses, numBoxes]) -- "
