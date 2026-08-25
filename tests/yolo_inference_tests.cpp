@@ -1,4 +1,5 @@
 #include "manager/classification_inference.hpp"
+#include "manager/label_studio_import.hpp"
 #include "manager/onnx_metadata.hpp"
 #include "manager/onnx_runtime_env.hpp"
 #include "manager/yolo_inference.hpp"
@@ -335,6 +336,98 @@ void test_hwcBgrToNchwFloat_correctChannelOrderAndScale() {
     CHECK(approxEqual(chw[5], 80.0f));
 }
 
+void test_parseLabelStudioExport_detectionBox() {
+    // Real schema, verified against Label Studio's own docs.
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image": "http://x/opensource/label-studio/1.jpg"},
+        "annotations": [{"result": [{
+            "type": "rectanglelabels",
+            "value": {"x": 50.8, "y": 5.87, "width": 12.4, "height": 10.46, "rotation": 0, "rectanglelabels": ["Moonwalker"]},
+            "original_width": 600, "original_height": 403
+        }]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].imageFilename == "1.jpg");
+    CHECK(result.images[0].boxes.size() == 1);
+    CHECK(result.images[0].boxes[0].className == "Moonwalker");
+    CHECK(result.images[0].boxes[0].box.x == 305);
+    CHECK(result.images[0].boxes[0].box.y == 24);
+    CHECK(result.images[0].boxes[0].box.width == 74);
+    CHECK(result.images[0].boxes[0].box.height == 42);
+}
+
+void test_parseLabelStudioExport_classification() {
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image_value": "http://x/dog_or_cat.jpg"},
+        "annotations": [{"result": [{
+            "type": "choices",
+            "value": {"choices": ["Dog"]}
+        }]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].imageFilename == "dog_or_cat.jpg");
+    CHECK(result.images[0].classificationLabel == "Dog");
+    CHECK(result.images[0].boxes.empty());
+}
+
+void test_parseLabelStudioExport_multipleBoxesSameImage() {
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image": "a.jpg"},
+        "annotations": [{"result": [
+            {"type": "rectanglelabels", "value": {"x": 0, "y": 0, "width": 10, "height": 10, "rotation": 0, "rectanglelabels": ["A"]}, "original_width": 100, "original_height": 100},
+            {"type": "rectanglelabels", "value": {"x": 50, "y": 50, "width": 10, "height": 10, "rotation": 0, "rectanglelabels": ["B"]}, "original_width": 100, "original_height": 100}
+        ]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].boxes.size() == 2);
+    CHECK(result.images[0].boxes[0].className == "A");
+    CHECK(result.images[0].boxes[1].className == "B");
+}
+
+void test_parseLabelStudioExport_rotatedBoxSkipped() {
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image": "a.jpg"},
+        "annotations": [{"result": [
+            {"type": "rectanglelabels", "value": {"x": 0, "y": 0, "width": 10, "height": 10, "rotation": 15, "rectanglelabels": ["A"]}, "original_width": 100, "original_height": 100}
+        ]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.skippedCount == 1);
+    // The image entry itself is still recorded, just with no boxes.
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].boxes.empty());
+}
+
+void test_parseLabelStudioExport_noRecognizableImageFieldSkipped() {
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"unrelated": "value"},
+        "annotations": [{"result": []}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.skippedCount == 1);
+    CHECK(result.images.empty());
+}
+
+void test_parseLabelStudioExport_nonArrayTopLevelIsHardError() {
+    const auto tasks = nlohmann::json::parse(R"({"not": "an array"})");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(!result.error.empty());
+    CHECK(result.images.empty());
+}
+
 } // namespace
 
 int main() {
@@ -362,6 +455,12 @@ int main() {
     test_extractPreprocessingHints_detracStyle();
     test_extractPreprocessingHints_disabledPixelNormalizationKeepsDefault();
     test_hwcBgrToNchwFloat_correctChannelOrderAndScale();
+    test_parseLabelStudioExport_detectionBox();
+    test_parseLabelStudioExport_classification();
+    test_parseLabelStudioExport_multipleBoxesSameImage();
+    test_parseLabelStudioExport_rotatedBoxSkipped();
+    test_parseLabelStudioExport_noRecognizableImageFieldSkipped();
+    test_parseLabelStudioExport_nonArrayTopLevelIsHardError();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
