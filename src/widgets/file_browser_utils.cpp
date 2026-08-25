@@ -1,5 +1,7 @@
 #include "widgets/file_browser_utils.hpp"
 
+#include <imgui.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <system_error>
@@ -78,4 +80,42 @@ std::vector<std::filesystem::path> listFiles(const std::filesystem::path& direct
         return a.filename().string() < b.filename().string();
     });
     return files;
+}
+
+bool drawDirectoryBrowser(std::string& explorerDirectory, std::string* selectedDirectory, const char* listChildId) {
+    namespace fs = std::filesystem;
+    fs::path explorerPath = normalizeDirectoryOrDefault(fs::path(explorerDirectory));
+    explorerDirectory = explorerPath.string();
+
+    ImGui::TextWrapped("%s", explorerDirectory.c_str());
+    if (ImGui::Button("Up")) {
+        const fs::path parent = explorerPath.parent_path();
+        if (!parent.empty()) {
+            explorerDirectory = parent.string();
+        }
+    }
+
+    bool usedFolder = false;
+    if (selectedDirectory != nullptr) {
+        ImGui::SameLine();
+        if (ImGui::Button("Use this folder")) {
+            *selectedDirectory = explorerDirectory;
+            usedFolder = true;
+        }
+    }
+
+    if (ImGui::BeginChild(listChildId, ImVec2(0, 200.0f), true)) {
+        const auto dirs = listDirectories(explorerPath);
+        if (dirs.empty()) {
+            ImGui::TextDisabled("No subdirectories found.");
+        }
+        for (const auto& dir : dirs) {
+            const std::string name = dir.filename().string();
+            if (ImGui::Selectable(name.c_str(), false)) {
+                explorerDirectory = dir.string();
+            }
+        }
+    }
+    ImGui::EndChild();
+    return usedFolder;
 }
