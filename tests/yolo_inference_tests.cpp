@@ -1,4 +1,5 @@
 #include "manager/classification_inference.hpp"
+#include "manager/detection_metrics.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/onnx_metadata.hpp"
 #include "manager/onnx_runtime_env.hpp"
@@ -428,6 +429,62 @@ void test_parseLabelStudioExport_nonArrayTopLevelIsHardError() {
     CHECK(result.images.empty());
 }
 
+void test_computeDetectionMetrics_onePositiveOneFalsePositive() {
+    // Hand-verified: 2 images, each with 1 ground-truth "cat" box.
+    // Image 0's prediction matches perfectly (conf 0.9) -> TP.
+    // Image 1's prediction doesn't overlap at all (conf 0.8) -> FP.
+    // precision=[1.0, 0.5], recall=[0.5, 0.5] -> AP = (0.5-0)*1.0 + (0.5-0.5)*0.5 = 0.5.
+    std::vector<DetectionEvaluationItem> items(2);
+    items[0].groundTruth = {GroundTruthBox{cv::Rect(0, 0, 10, 10), "cat"}};
+    items[0].predictions = {Detection{cv::Rect(0, 0, 10, 10), 0, "cat", 0.9f}};
+    items[1].groundTruth = {GroundTruthBox{cv::Rect(0, 0, 10, 10), "cat"}};
+    items[1].predictions = {Detection{cv::Rect(100, 100, 10, 10), 0, "cat", 0.8f}};
+
+    const DetectionMetrics metrics = computeDetectionMetrics(items, 0.5f);
+    CHECK(metrics.perClass.size() == 1);
+    CHECK(metrics.perClass[0].className == "cat");
+    CHECK(approxEqual(metrics.perClass[0].averagePrecision, 0.5f));
+    CHECK(approxEqual(metrics.meanAveragePrecision, 0.5f));
+    // Overall precision/recall derived from the final TP/FP counts:
+    // precision = 1/(1+1) = 0.5, recall = 1/2 = 0.5.
+    CHECK(metrics.perClass[0].truePositives == 1);
+    CHECK(metrics.perClass[0].falsePositives == 1);
+    CHECK(metrics.perClass[0].numGroundTruth == 2);
+}
+
+void test_computeDetectionMetrics_perfectDetectorIsApOne() {
+    std::vector<DetectionEvaluationItem> items(1);
+    items[0].groundTruth = {GroundTruthBox{cv::Rect(0, 0, 10, 10), "cat"}};
+    items[0].predictions = {Detection{cv::Rect(0, 0, 10, 10), 0, "cat", 0.99f}};
+
+    const DetectionMetrics metrics = computeDetectionMetrics(items, 0.5f);
+    CHECK(approxEqual(metrics.meanAveragePrecision, 1.0f));
+}
+
+void test_computeDetectionMetrics_noOverlapIsApZero() {
+    std::vector<DetectionEvaluationItem> items(1);
+    items[0].groundTruth = {GroundTruthBox{cv::Rect(0, 0, 10, 10), "cat"}};
+    items[0].predictions = {Detection{cv::Rect(100, 100, 10, 10), 0, "cat", 0.9f}};
+
+    const DetectionMetrics metrics = computeDetectionMetrics(items, 0.5f);
+    CHECK(approxEqual(metrics.meanAveragePrecision, 0.0f));
+}
+
+void test_computeDetectionMetrics_excludesClassWithNoGroundTruth() {
+    // "cat" has a perfect match (AP=1.0); "dog" has predictions but zero
+    // ground truth, so it must not dilute the mean.
+    std::vector<DetectionEvaluationItem> items(1);
+    items[0].groundTruth = {GroundTruthBox{cv::Rect(0, 0, 10, 10), "cat"}};
+    items[0].predictions = {
+        Detection{cv::Rect(0, 0, 10, 10), 0, "cat", 0.9f},
+        Detection{cv::Rect(50, 50, 10, 10), 1, "dog", 0.7f},
+    };
+
+    const DetectionMetrics metrics = computeDetectionMetrics(items, 0.5f);
+    CHECK(metrics.perClass.size() == 2);
+    CHECK(approxEqual(metrics.meanAveragePrecision, 1.0f));
+}
+
 } // namespace
 
 int main() {
@@ -461,6 +518,10 @@ int main() {
     test_parseLabelStudioExport_rotatedBoxSkipped();
     test_parseLabelStudioExport_noRecognizableImageFieldSkipped();
     test_parseLabelStudioExport_nonArrayTopLevelIsHardError();
+    test_computeDetectionMetrics_onePositiveOneFalsePositive();
+    test_computeDetectionMetrics_perfectDetectorIsApOne();
+    test_computeDetectionMetrics_noOverlapIsApZero();
+    test_computeDetectionMetrics_excludesClassWithNoGroundTruth();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
