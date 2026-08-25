@@ -33,7 +33,7 @@ LetterboxTransform computeLetterboxTransform(
     int origWidth, int origHeight, int targetWidth, int targetHeight, bool centerPadding = true);
 
 // Resizes+pads `frame` into a `targetWidth` x `targetHeight` canvas per
-// `transform`, ready to feed to cv::dnn::blobFromImage. `targetWidth`
+// `transform`, ready to feed to hwcBgrToNchwFloat(). `targetWidth`
 // and `targetHeight` need not be equal -- non-square model inputs are
 // supported. `fillValue` (0-255, replicated across channels) fills the
 // padding border.
