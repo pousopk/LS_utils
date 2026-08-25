@@ -1,5 +1,6 @@
 #include "manager/yolo_inference.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 
@@ -51,6 +52,60 @@ void test_computeIoU_partialOverlap() {
     CHECK(approxEqual(iou, 50.0f / 150.0f));
 }
 
+cv::Mat makeSyntheticOutput(const std::vector<std::array<float, 5>>& rows) {
+    // Each row: [cx, cy, w, h, classScore] -- single class for this test.
+    cv::Mat output(static_cast<int>(rows.size()), 5, CV_32F);
+    for (size_t r = 0; r < rows.size(); ++r) {
+        for (int c = 0; c < 5; ++c) {
+            output.at<float>(static_cast<int>(r), c) = rows[r][c];
+        }
+    }
+    return output;
+}
+
+void test_decodeYoloOutput_confidenceAndNms() {
+    const cv::Mat output = makeSyntheticOutput({
+        {50, 50, 20, 20, 0.9f},     // kept: highest-confidence of an overlapping pair
+        {52, 51, 20, 20, 0.8f},     // suppressed: overlaps row 0 heavily (IoU ~0.75)
+        {200, 200, 10, 10, 0.95f},  // kept: no overlap with anything
+        {300, 300, 10, 10, 0.05f},  // dropped: below confidence threshold
+    });
+    const LetterboxTransform identity{1.0f, 0.0f, 0.0f};
+    const auto detections = decodeYoloOutput(output, {"object"}, identity, 640, 640, 0.5f, 0.45f);
+
+    CHECK(detections.size() == 2);
+    bool foundHighConf = false;
+    bool foundFarBox = false;
+    for (const auto& d : detections) {
+        CHECK(d.classId == 0);
+        CHECK(d.className == "object");
+        if (approxEqual(static_cast<float>(d.box.x), 40.0f, 1.0f) && approxEqual(static_cast<float>(d.box.y), 40.0f, 1.0f)) {
+            foundHighConf = true;
+        }
+        if (approxEqual(static_cast<float>(d.box.x), 195.0f, 1.0f) && approxEqual(static_cast<float>(d.box.y), 195.0f, 1.0f)) {
+            foundFarBox = true;
+        }
+    }
+    CHECK(foundHighConf);
+    CHECK(foundFarBox);
+}
+
+void test_computeBoxAgreement_matchesOverlappingSameClass() {
+    std::vector<Detection> a = {
+        Detection{cv::Rect(40, 40, 20, 20), 0, "object", 0.9f},
+        Detection{cv::Rect(200, 200, 10, 10), 0, "object", 0.95f},
+    };
+    std::vector<Detection> b = {
+        Detection{cv::Rect(42, 41, 20, 20), 0, "object", 0.8f},   // overlaps a[0], IoU ~0.75
+        Detection{cv::Rect(500, 500, 10, 10), 1, "other", 0.7f},  // different class, no match
+    };
+
+    const BoxAgreement agreement = computeBoxAgreement(a, b, 0.45f);
+    CHECK(agreement.matchedPairs == 1);
+    CHECK(agreement.totalA == 2);
+    CHECK(agreement.totalB == 2);
+}
+
 } // namespace
 
 int main() {
@@ -59,6 +114,8 @@ int main() {
     test_computeIoU_identical();
     test_computeIoU_disjoint();
     test_computeIoU_partialOverlap();
+    test_decodeYoloOutput_confidenceAndNms();
+    test_computeBoxAgreement_matchesOverlappingSameClass();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

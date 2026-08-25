@@ -29,3 +29,32 @@ LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int 
 cv::Mat letterboxResize(const cv::Mat& frame, int modelInputSize, const LetterboxTransform& transform);
 
 float computeIoU(const cv::Rect& a, const cv::Rect& b);
+
+// Decodes a raw Ultralytics YOLOv8/v11-style output tensor already reshaped
+// to a `numBoxes` x (4 + numClasses) CV_32F matrix (each row is
+// [cx, cy, w, h, classScore_0, ..., classScore_{numClasses-1}], in
+// model-input-pixel space) into detections in original-frame pixel
+// coordinates, keeping only the best class per row above `confThreshold`
+// and applying NMS at `nmsThreshold`.
+std::vector<Detection> decodeYoloOutput(
+    const cv::Mat& output,
+    const std::vector<std::string>& classNames,
+    const LetterboxTransform& transform,
+    int origWidth,
+    int origHeight,
+    float confThreshold,
+    float nmsThreshold);
+
+struct BoxAgreement {
+    int matchedPairs = 0;
+    int totalA = 0;
+    int totalB = 0;
+};
+
+// Greedily matches same-class detections between `a` and `b` whose IoU is
+// at or above `iouThreshold`, one-to-one (each detection matches at most
+// once). Used to show how much two models agree on the same frame.
+BoxAgreement computeBoxAgreement(
+    const std::vector<Detection>& a,
+    const std::vector<Detection>& b,
+    float iouThreshold);

@@ -1,5 +1,6 @@
 #include "manager/yolo_inference.hpp"
 
+#include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -39,4 +40,106 @@ float computeIoU(const cv::Rect& a, const cv::Rect& b) {
     }
     const float unionArea = static_cast<float>(a.area() + b.area()) - intersectionArea;
     return unionArea > 0.0f ? intersectionArea / unionArea : 0.0f;
+}
+
+std::vector<Detection> decodeYoloOutput(
+    const cv::Mat& output,
+    const std::vector<std::string>& classNames,
+    const LetterboxTransform& transform,
+    int origWidth,
+    int origHeight,
+    float confThreshold,
+    float nmsThreshold) {
+    const int numClasses = output.cols - 4;
+
+    std::vector<cv::Rect> boxes;
+    std::vector<float> scores;
+    std::vector<int> classIds;
+
+    for (int row = 0; row < output.rows; ++row) {
+        const float* data = output.ptr<float>(row);
+        const float cx = data[0];
+        const float cy = data[1];
+        const float w = data[2];
+        const float h = data[3];
+
+        int bestClass = -1;
+        float bestScore = 0.0f;
+        for (int c = 0; c < numClasses; ++c) {
+            const float score = data[4 + c];
+            if (score > bestScore) {
+                bestScore = score;
+                bestClass = c;
+            }
+        }
+        if (bestClass < 0 || bestScore < confThreshold) {
+            continue;
+        }
+
+        const float x0 = (cx - w / 2.0f - transform.padX) / transform.scale;
+        const float y0 = (cy - h / 2.0f - transform.padY) / transform.scale;
+        const float boxWidth = w / transform.scale;
+        const float boxHeight = h / transform.scale;
+
+        cv::Rect box(
+            static_cast<int>(std::round(x0)),
+            static_cast<int>(std::round(y0)),
+            static_cast<int>(std::round(boxWidth)),
+            static_cast<int>(std::round(boxHeight)));
+        box &= cv::Rect(0, 0, origWidth, origHeight);
+        if (box.width <= 0 || box.height <= 0) {
+            continue;
+        }
+
+        boxes.push_back(box);
+        scores.push_back(bestScore);
+        classIds.push_back(bestClass);
+    }
+
+    std::vector<int> keptIndices;
+    cv::dnn::NMSBoxes(boxes, scores, confThreshold, nmsThreshold, keptIndices);
+
+    std::vector<Detection> detections;
+    detections.reserve(keptIndices.size());
+    for (int index : keptIndices) {
+        Detection detection;
+        detection.box = boxes[index];
+        detection.classId = classIds[index];
+        detection.confidence = scores[index];
+        detection.className = (classIds[index] >= 0 && classIds[index] < static_cast<int>(classNames.size()))
+            ? classNames[classIds[index]]
+            : ("class_" + std::to_string(classIds[index]));
+        detections.push_back(std::move(detection));
+    }
+    return detections;
+}
+
+BoxAgreement computeBoxAgreement(
+    const std::vector<Detection>& a,
+    const std::vector<Detection>& b,
+    float iouThreshold) {
+    BoxAgreement agreement;
+    agreement.totalA = static_cast<int>(a.size());
+    agreement.totalB = static_cast<int>(b.size());
+
+    std::vector<bool> usedB(b.size(), false);
+    for (const auto& detectionA : a) {
+        int bestIndex = -1;
+        float bestIoU = iouThreshold;
+        for (size_t i = 0; i < b.size(); ++i) {
+            if (usedB[i] || b[i].classId != detectionA.classId) {
+                continue;
+            }
+            const float iou = computeIoU(detectionA.box, b[i].box);
+            if (iou >= bestIoU) {
+                bestIoU = iou;
+                bestIndex = static_cast<int>(i);
+            }
+        }
+        if (bestIndex >= 0) {
+            usedB[bestIndex] = true;
+            agreement.matchedPairs++;
+        }
+    }
+    return agreement;
 }
