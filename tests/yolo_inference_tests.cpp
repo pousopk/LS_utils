@@ -1,3 +1,4 @@
+#include "manager/batch_evaluation.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/classification_metrics.hpp"
 #include "manager/detection_metrics.hpp"
@@ -6,9 +7,12 @@
 #include "manager/onnx_runtime_env.hpp"
 #include "manager/yolo_inference.hpp"
 
+#include <opencv2/imgcodecs.hpp>
+
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
 namespace {
 int g_failures = 0;
@@ -507,6 +511,70 @@ void test_computeClassificationMetrics_emptyIsZeroAccuracy() {
     CHECK(approxEqual(metrics.accuracy, 0.0f));
 }
 
+void test_computeTimingStats_meanMedianP95() {
+    const TimingStats stats = computeTimingStats({10.0, 20.0, 30.0, 40.0, 50.0});
+    CHECK(stats.count == 5);
+    CHECK(approxEqual(static_cast<float>(stats.meanMs), 30.0f));
+    CHECK(approxEqual(static_cast<float>(stats.medianMs), 30.0f));
+    CHECK(approxEqual(static_cast<float>(stats.p95Ms), 48.0f));  // interpolated between rank 3 (40) and 4 (50)
+}
+
+void test_runDetectionBatchEvaluation_scansAndCrossReferences() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat imgA(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat imgB(10, 10, CV_8UC3, cv::Scalar(255, 255, 255));
+    cv::imwrite((tempDir / "a.jpg").string(), imgA);
+    cv::imwrite((tempDir / "b.jpg").string(), imgB);
+
+    LabelStudioImportResult groundTruth;
+    ImageGroundTruth gtA;
+    gtA.imageFilename = "a.jpg";
+    gtA.boxes.push_back(GroundTruthBox{cv::Rect(1, 1, 2, 2), "cat"});
+    groundTruth.images.push_back(gtA);
+    // "b.jpg" intentionally has no ground-truth entry.
+
+    const auto result = runDetectionBatchEvaluation(tempDir.string(), &groundTruth, [](const cv::Mat&) {
+        std::vector<Detection> dets;
+        dets.push_back(Detection{cv::Rect(1, 1, 2, 2), 0, "cat", 0.9f});
+        return dets;
+    });
+
+    CHECK(result.error.empty());
+    CHECK(result.imagesFound == 2);
+    CHECK(result.imagesWithGroundTruth == 1);
+    CHECK(result.images.size() == 2);
+    CHECK(result.images[0].imageFilename == "a.jpg");
+    CHECK(result.images[0].hasGroundTruth == true);
+    CHECK(result.images[0].groundTruthBoxes.size() == 1);
+    CHECK(result.images[1].imageFilename == "b.jpg");
+    CHECK(result.images[1].hasGroundTruth == false);
+    CHECK(result.timing.count == 2);
+
+    const auto evalItems = toDetectionEvaluationItems(result);
+    CHECK(evalItems.size() == 1);  // only a.jpg has ground truth
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runDetectionBatchEvaluation_emptyFolderIsError() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval_empty";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    const auto result = runDetectionBatchEvaluation(
+        tempDir.string(), nullptr, [](const cv::Mat&) { return std::vector<Detection>{}; });
+
+    CHECK(!result.error.empty());
+    CHECK(result.images.empty());
+
+    fs::remove_all(tempDir, ec);
+}
+
 } // namespace
 
 int main() {
@@ -546,6 +614,9 @@ int main() {
     test_computeDetectionMetrics_excludesClassWithNoGroundTruth();
     test_computeClassificationMetrics_accuracyAndConfusionMatrix();
     test_computeClassificationMetrics_emptyIsZeroAccuracy();
+    test_computeTimingStats_meanMedianP95();
+    test_runDetectionBatchEvaluation_scansAndCrossReferences();
+    test_runDetectionBatchEvaluation_emptyFolderIsError();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
