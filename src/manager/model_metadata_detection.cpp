@@ -1,7 +1,7 @@
 #include "manager/model_metadata_detection.hpp"
+#include "manager/onnx_runtime_env.hpp"
 
 #include <opencv2/core.hpp>
-#include <opencv2/dnn.hpp>
 
 ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
     ModelAutoDetectResult result;
@@ -26,23 +26,38 @@ ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
     result.classNames = extractClassNames(model);
     result.hints = extractPreprocessingHints(model);
 
+    OrtSessionResult session = createOrtSession(onnxPath);
+    if (!session.session) {
+        // Mode guess unavailable -- shape and class names (already set
+        // above) are still useful on their own.
+        return result;
+    }
+
     try {
-        cv::dnn::Net net = cv::dnn::readNetFromONNX(onnxPath);
-        if (net.empty()) {
-            return result;
-        }
         cv::Mat blankFrame = cv::Mat::zeros(shape.height, shape.width, CV_8UC3);
-        cv::Mat blob = cv::dnn::blobFromImage(
-            blankFrame, result.hints.inputScale, cv::Size(shape.width, shape.height), cv::Scalar(), true, false);
-        net.setInput(blob);
-        cv::Mat output = net.forward();
+        const std::vector<float> inputData = hwcBgrToNchwFloat(blankFrame, result.hints.inputScale);
+        const std::vector<int64_t> inputShape = {1, 3, shape.height, shape.width};
+
+        Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo, const_cast<float*>(inputData.data()), inputData.size(), inputShape.data(), inputShape.size());
+
+        Ort::AllocatorWithDefaultOptions allocator;
+        const std::string inputName = session.session->GetInputNameAllocated(0, allocator).get();
+        const std::string outputName = session.session->GetOutputNameAllocated(0, allocator).get();
+        const char* inputNames[] = {inputName.c_str()};
+        const char* outputNames[] = {outputName.c_str()};
+
+        std::vector<Ort::Value> outputs =
+            session.session->Run(Ort::RunOptions{nullptr}, inputNames, &inputTensor, 1, outputNames, 1);
+        const cv::Mat output = ortValueToMat(outputs.front());
 
         if (output.dims == 3 && output.size[0] == 1) {
             result.suggestedMode = DetectedTaskMode::Detection;
         } else if (output.dims == 2 && output.size[0] == 1) {
             result.suggestedMode = DetectedTaskMode::Classification;
         }
-    } catch (const cv::Exception&) {
+    } catch (const Ort::Exception&) {
         // Mode guess failed -- leave suggestedMode at Unknown. Shape and
         // class names (already set above) are still useful on their own.
     }
