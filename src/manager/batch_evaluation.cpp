@@ -80,7 +80,9 @@ TimingStats computeTimingStats(std::vector<double> inferenceMsSamples) {
 BatchEvaluationResult runDetectionBatchEvaluation(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
-    const std::function<std::vector<Detection>(const cv::Mat&)>& infer) {
+    const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
+    const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested) {
     BatchEvaluationResult result;
 
     const auto files = listImageFiles(imageFolderPath);
@@ -89,8 +91,12 @@ BatchEvaluationResult runDetectionBatchEvaluation(
         return result;
     }
 
+    const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
     for (const auto& path : files) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            break;
+        }
         const cv::Mat frame = cv::imread(path.string());
         if (frame.empty()) {
             continue;
@@ -113,6 +119,9 @@ BatchEvaluationResult runDetectionBatchEvaluation(
         }
 
         result.images.push_back(std::move(imageResult));
+        if (onProgress) {
+            onProgress(result.imagesFound, totalFiles);
+        }
     }
 
     result.timing = computeTimingStats(timings);
@@ -122,7 +131,9 @@ BatchEvaluationResult runDetectionBatchEvaluation(
 BatchEvaluationResult runClassificationBatchEvaluation(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
-    const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer) {
+    const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
+    const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested) {
     BatchEvaluationResult result;
 
     const auto files = listImageFiles(imageFolderPath);
@@ -131,8 +142,12 @@ BatchEvaluationResult runClassificationBatchEvaluation(
         return result;
     }
 
+    const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
     for (const auto& path : files) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            break;
+        }
         const cv::Mat frame = cv::imread(path.string());
         if (frame.empty()) {
             continue;
@@ -155,6 +170,9 @@ BatchEvaluationResult runClassificationBatchEvaluation(
         }
 
         result.images.push_back(std::move(imageResult));
+        if (onProgress) {
+            onProgress(result.imagesFound, totalFiles);
+        }
     }
 
     result.timing = computeTimingStats(timings);

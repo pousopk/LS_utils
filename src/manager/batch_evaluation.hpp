@@ -8,6 +8,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
@@ -46,15 +47,23 @@ struct BatchEvaluationResult {
 // each by basename against `groundTruth` (pass nullptr for none -- images
 // are still evaluated, just with hasGroundTruth=false), and calls `infer`
 // once per image. Synchronous -- run this off the UI thread if needed.
+// `onProgress` (if non-null) is called once per processed image with
+// (completed, total). `cancelRequested` (if non-null and observed true)
+// stops the loop early, returning whatever was completed so far with
+// `error` left empty (a cancelled run is not a hard failure).
 BatchEvaluationResult runDetectionBatchEvaluation(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
-    const std::function<std::vector<Detection>(const cv::Mat&)>& infer);
+    const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
+    const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 BatchEvaluationResult runClassificationBatchEvaluation(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
-    const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer);
+    const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
+    const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 // Convenience conversions from a BatchEvaluationResult's per-image data
 // into the metrics functions' input shape (only images with ground truth

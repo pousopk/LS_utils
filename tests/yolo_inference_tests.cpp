@@ -10,9 +10,11 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <utility>
 
 namespace {
 int g_failures = 0;
@@ -575,6 +577,105 @@ void test_runDetectionBatchEvaluation_emptyFolderIsError() {
     fs::remove_all(tempDir, ec);
 }
 
+void test_runDetectionBatchEvaluation_progressCallback() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval_progress";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+    cv::imwrite((tempDir / "b.jpg").string(), img);
+    cv::imwrite((tempDir / "c.jpg").string(), img);
+
+    std::vector<std::pair<int, int>> progressCalls;
+    const auto result = runDetectionBatchEvaluation(
+        tempDir.string(), nullptr,
+        [](const cv::Mat&) { return std::vector<Detection>{}; },
+        [&](int completed, int total) { progressCalls.push_back({completed, total}); });
+
+    CHECK(result.error.empty());
+    CHECK(result.imagesFound == 3);
+    CHECK(progressCalls.size() == 3);
+    CHECK(progressCalls[0] == std::make_pair(1, 3));
+    CHECK(progressCalls[1] == std::make_pair(2, 3));
+    CHECK(progressCalls[2] == std::make_pair(3, 3));
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runDetectionBatchEvaluation_cancellation() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval_cancel";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+    cv::imwrite((tempDir / "b.jpg").string(), img);
+    cv::imwrite((tempDir / "c.jpg").string(), img);
+
+    std::atomic<bool> cancelRequested{true};
+    const auto result = runDetectionBatchEvaluation(
+        tempDir.string(), nullptr,
+        [](const cv::Mat&) { return std::vector<Detection>{}; },
+        nullptr, &cancelRequested);
+
+    CHECK(result.error.empty());
+    CHECK(result.images.empty());
+    CHECK(result.imagesFound == 0);
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runClassificationBatchEvaluation_progressCallback() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval_cls_progress";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+    cv::imwrite((tempDir / "b.jpg").string(), img);
+
+    std::vector<std::pair<int, int>> progressCalls;
+    const auto result = runClassificationBatchEvaluation(
+        tempDir.string(), nullptr,
+        [](const cv::Mat&) { return std::vector<ClassPrediction>{}; },
+        [&](int completed, int total) { progressCalls.push_back({completed, total}); });
+
+    CHECK(result.error.empty());
+    CHECK(result.imagesFound == 2);
+    CHECK(progressCalls.size() == 2);
+    CHECK(progressCalls[0] == std::make_pair(1, 2));
+    CHECK(progressCalls[1] == std::make_pair(2, 2));
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runClassificationBatchEvaluation_cancellation() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_batch_eval_cls_cancel";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+    cv::imwrite((tempDir / "b.jpg").string(), img);
+
+    std::atomic<bool> cancelRequested{true};
+    const auto result = runClassificationBatchEvaluation(
+        tempDir.string(), nullptr,
+        [](const cv::Mat&) { return std::vector<ClassPrediction>{}; },
+        nullptr, &cancelRequested);
+
+    CHECK(result.error.empty());
+    CHECK(result.images.empty());
+    CHECK(result.imagesFound == 0);
+
+    fs::remove_all(tempDir, ec);
+}
+
 } // namespace
 
 int main() {
@@ -617,6 +718,10 @@ int main() {
     test_computeTimingStats_meanMedianP95();
     test_runDetectionBatchEvaluation_scansAndCrossReferences();
     test_runDetectionBatchEvaluation_emptyFolderIsError();
+    test_runDetectionBatchEvaluation_progressCallback();
+    test_runDetectionBatchEvaluation_cancellation();
+    test_runClassificationBatchEvaluation_progressCallback();
+    test_runClassificationBatchEvaluation_cancellation();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
