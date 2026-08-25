@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opencv2/core.hpp>
+#include <opencv2/dnn.hpp>
 
 #include <string>
 #include <vector>
@@ -58,3 +59,25 @@ BoxAgreement computeBoxAgreement(
     const std::vector<Detection>& a,
     const std::vector<Detection>& b,
     float iouThreshold);
+
+class YoloModel {
+public:
+    // Loads the ONNX model and optional class-names file (one class name
+    // per line; pass an empty path to label classes by index instead). On
+    // failure, isValid() is false and errorOut holds a human-readable
+    // reason -- construction never throws.
+    YoloModel(const std::string& onnxPath, const std::string& classNamesPath, std::string& errorOut);
+
+    bool isValid() const { return valid_; }
+
+    // Runs letterbox -> forward pass -> decode on `frame` using this
+    // model's loaded network. Returns an empty vector if the model isn't
+    // valid or `frame` is empty.
+    std::vector<Detection> infer(const cv::Mat& frame, float confThreshold, float nmsThreshold);
+
+private:
+    cv::dnn::Net net_;
+    std::vector<std::string> classNames_;
+    bool valid_ = false;
+    static constexpr int kModelInputSize = 640;
+};

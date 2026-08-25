@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <fstream>
 
 LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int modelInputSize) {
     const float scale = std::min(
@@ -142,4 +143,62 @@ BoxAgreement computeBoxAgreement(
         }
     }
     return agreement;
+}
+
+namespace {
+std::vector<std::string> loadClassNames(const std::string& path) {
+    std::vector<std::string> names;
+    if (path.empty()) {
+        return names;
+    }
+    std::ifstream file(path);
+    std::string line;
+    while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (!line.empty()) {
+            names.push_back(line);
+        }
+    }
+    return names;
+}
+} // namespace
+
+YoloModel::YoloModel(const std::string& onnxPath, const std::string& classNamesPath, std::string& errorOut) {
+    try {
+        net_ = cv::dnn::readNetFromONNX(onnxPath);
+    } catch (const cv::Exception& e) {
+        errorOut = std::string("Failed to load ONNX model: ") + e.what();
+        return;
+    }
+    if (net_.empty()) {
+        errorOut = "Failed to load ONNX model: empty network";
+        return;
+    }
+    classNames_ = loadClassNames(classNamesPath);
+    valid_ = true;
+}
+
+std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshold, float nmsThreshold) {
+    if (!valid_ || frame.empty()) {
+        return {};
+    }
+
+    const LetterboxTransform transform = computeLetterboxTransform(frame.cols, frame.rows, kModelInputSize);
+    const cv::Mat letterboxed = letterboxResize(frame, kModelInputSize, transform);
+
+    cv::Mat blob = cv::dnn::blobFromImage(
+        letterboxed, 1.0 / 255.0, cv::Size(kModelInputSize, kModelInputSize), cv::Scalar(), true, false);
+    net_.setInput(blob);
+    cv::Mat rawOutput = net_.forward();
+
+    // Ultralytics v8/v11 export shape: [1, 4+numClasses, numBoxes]. Reshape
+    // to [4+numClasses, numBoxes] and transpose to [numBoxes, 4+numClasses]
+    // so each row is one candidate box, matching decodeYoloOutput's input.
+    cv::Mat output(rawOutput.size[1], rawOutput.size[2], CV_32F, rawOutput.ptr<float>());
+    cv::Mat transposed;
+    cv::transpose(output, transposed);
+
+    return decodeYoloOutput(transposed, classNames_, transform, frame.cols, frame.rows, confThreshold, nmsThreshold);
 }
