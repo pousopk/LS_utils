@@ -25,16 +25,18 @@ std::vector<ClassPrediction> decodeClassificationOutput(
 
 class ClassificationModel {
 public:
-    // Loads the ONNX classifier and optional class-names file (one name
-    // per line; empty path means classes are labeled by index).
-    // `inputWidth`/`inputHeight` must match what the model was exported
-    // with -- unlike detection, classifiers don't share one fixed size
-    // (real examples found at 448x576 and 576x960), so there's no safe
-    // default to fall back to. On failure, isValid() is false and
-    // errorOut holds a human-readable reason -- construction never throws.
+    // Loads the ONNX classifier. `classNames` is used as-is (empty means
+    // label classes by index) -- resolving where names come from (a
+    // browsed file, auto-detected metadata, ...) is the caller's job, not
+    // this class's. `inputWidth`/`inputHeight` must match what the model
+    // was exported with -- unlike detection, classifiers don't share one
+    // fixed size (real examples found at 448x576 and 576x960), so
+    // there's no safe default to fall back to. On failure, isValid() is
+    // false and errorOut holds a human-readable reason -- construction
+    // never throws.
     ClassificationModel(
         const std::string& onnxPath,
-        const std::string& classNamesPath,
+        const std::vector<std::string>& classNames,
         int inputWidth,
         int inputHeight,
         std::string& errorOut);

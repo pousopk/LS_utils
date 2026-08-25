@@ -4,27 +4,26 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
-#include <fstream>
 
-LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int modelInputSize) {
+LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int targetWidth, int targetHeight) {
     const float scale = std::min(
-        static_cast<float>(modelInputSize) / static_cast<float>(origWidth),
-        static_cast<float>(modelInputSize) / static_cast<float>(origHeight));
+        static_cast<float>(targetWidth) / static_cast<float>(origWidth),
+        static_cast<float>(targetHeight) / static_cast<float>(origHeight));
     const float scaledWidth = origWidth * scale;
     const float scaledHeight = origHeight * scale;
 
     LetterboxTransform transform;
     transform.scale = scale;
-    transform.padX = (modelInputSize - scaledWidth) / 2.0f;
-    transform.padY = (modelInputSize - scaledHeight) / 2.0f;
+    transform.padX = (targetWidth - scaledWidth) / 2.0f;
+    transform.padY = (targetHeight - scaledHeight) / 2.0f;
     return transform;
 }
 
-cv::Mat letterboxResize(const cv::Mat& frame, int modelInputSize, const LetterboxTransform& transform) {
+cv::Mat letterboxResize(const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform) {
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(), transform.scale, transform.scale);
 
-    cv::Mat canvas(modelInputSize, modelInputSize, frame.type(), cv::Scalar(114, 114, 114));
+    cv::Mat canvas(targetHeight, targetWidth, frame.type(), cv::Scalar(114, 114, 114));
     resized.copyTo(canvas(cv::Rect(
         static_cast<int>(transform.padX),
         static_cast<int>(transform.padY),
@@ -145,27 +144,13 @@ BoxAgreement computeBoxAgreement(
     return agreement;
 }
 
-namespace {
-std::vector<std::string> loadClassNames(const std::string& path) {
-    std::vector<std::string> names;
-    if (path.empty()) {
-        return names;
-    }
-    std::ifstream file(path);
-    std::string line;
-    while (std::getline(file, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        if (!line.empty()) {
-            names.push_back(line);
-        }
-    }
-    return names;
-}
-} // namespace
-
-YoloModel::YoloModel(const std::string& onnxPath, const std::string& classNamesPath, std::string& errorOut) {
+YoloModel::YoloModel(
+    const std::string& onnxPath,
+    const std::vector<std::string>& classNames,
+    int inputWidth,
+    int inputHeight,
+    std::string& errorOut)
+    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight) {
     try {
         net_ = cv::dnn::readNetFromONNX(onnxPath);
     } catch (const cv::Exception& e) {
@@ -176,7 +161,6 @@ YoloModel::YoloModel(const std::string& onnxPath, const std::string& classNamesP
         errorOut = "Failed to load ONNX model: empty network";
         return;
     }
-    classNames_ = loadClassNames(classNamesPath);
     valid_ = true;
 }
 
@@ -185,11 +169,11 @@ std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshol
         return {};
     }
 
-    const LetterboxTransform transform = computeLetterboxTransform(frame.cols, frame.rows, kModelInputSize);
-    const cv::Mat letterboxed = letterboxResize(frame, kModelInputSize, transform);
+    const LetterboxTransform transform = computeLetterboxTransform(frame.cols, frame.rows, inputWidth_, inputHeight_);
+    const cv::Mat letterboxed = letterboxResize(frame, inputWidth_, inputHeight_, transform);
 
     cv::Mat blob = cv::dnn::blobFromImage(
-        letterboxed, 1.0 / 255.0, cv::Size(kModelInputSize, kModelInputSize), cv::Scalar(), true, false);
+        letterboxed, 1.0 / 255.0, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
     net_.setInput(blob);
     cv::Mat rawOutput = net_.forward();
 

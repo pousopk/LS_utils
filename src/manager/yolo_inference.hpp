@@ -23,11 +23,13 @@ struct LetterboxTransform {
     float padY = 0.0f;
 };
 
-LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int modelInputSize);
+LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int targetWidth, int targetHeight);
 
-// Resizes+pads `frame` into a `modelInputSize` x `modelInputSize` square
-// per `transform`, ready to feed to cv::dnn::blobFromImage.
-cv::Mat letterboxResize(const cv::Mat& frame, int modelInputSize, const LetterboxTransform& transform);
+// Resizes+pads `frame` into a `targetWidth` x `targetHeight` canvas per
+// `transform`, ready to feed to cv::dnn::blobFromImage. `targetWidth`
+// and `targetHeight` need not be equal -- non-square model inputs are
+// supported.
+cv::Mat letterboxResize(const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform);
 
 float computeIoU(const cv::Rect& a, const cv::Rect& b);
 
@@ -62,11 +64,19 @@ BoxAgreement computeBoxAgreement(
 
 class YoloModel {
 public:
-    // Loads the ONNX model and optional class-names file (one class name
-    // per line; pass an empty path to label classes by index instead). On
-    // failure, isValid() is false and errorOut holds a human-readable
-    // reason -- construction never throws.
-    YoloModel(const std::string& onnxPath, const std::string& classNamesPath, std::string& errorOut);
+    // Loads the ONNX model. `classNames` is used as-is (empty means
+    // label classes by index) -- resolving where names come from (a
+    // browsed file, auto-detected metadata, ...) is the caller's job,
+    // not this class's. `inputWidth`/`inputHeight` must match what the
+    // model was exported with. On failure, isValid() is false and
+    // errorOut holds a human-readable reason -- construction never
+    // throws.
+    YoloModel(
+        const std::string& onnxPath,
+        const std::vector<std::string>& classNames,
+        int inputWidth,
+        int inputHeight,
+        std::string& errorOut);
 
     bool isValid() const { return valid_; }
 
@@ -78,6 +88,7 @@ public:
 private:
     cv::dnn::Net net_;
     std::vector<std::string> classNames_;
+    int inputWidth_ = 640;
+    int inputHeight_ = 640;
     bool valid_ = false;
-    static constexpr int kModelInputSize = 640;
 };

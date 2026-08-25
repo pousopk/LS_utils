@@ -4,27 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
-
-namespace {
-std::vector<std::string> loadClassNames(const std::string& path) {
-    std::vector<std::string> names;
-    if (path.empty()) {
-        return names;
-    }
-    std::ifstream file(path);
-    std::string line;
-    while (std::getline(file, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        if (!line.empty()) {
-            names.push_back(line);
-        }
-    }
-    return names;
-}
-} // namespace
 
 std::vector<ClassPrediction> decodeClassificationOutput(
     const cv::Mat& output,
@@ -69,11 +48,11 @@ std::vector<ClassPrediction> decodeClassificationOutput(
 
 ClassificationModel::ClassificationModel(
     const std::string& onnxPath,
-    const std::string& classNamesPath,
+    const std::vector<std::string>& classNames,
     int inputWidth,
     int inputHeight,
     std::string& errorOut)
-    : inputWidth_(inputWidth), inputHeight_(inputHeight) {
+    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight) {
     try {
         net_ = cv::dnn::readNetFromONNX(onnxPath);
     } catch (const cv::Exception& e) {
@@ -84,7 +63,6 @@ ClassificationModel::ClassificationModel(
         errorOut = "Failed to load ONNX model: empty network";
         return;
     }
-    classNames_ = loadClassNames(classNamesPath);
     valid_ = true;
 }
 

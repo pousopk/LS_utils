@@ -26,17 +26,27 @@ bool approxEqual(float a, float b, float tolerance = 0.01f) {
 namespace {
 
 void test_computeLetterboxTransform_wideFrame() {
-    const LetterboxTransform t = computeLetterboxTransform(1280, 720, 640);
+    const LetterboxTransform t = computeLetterboxTransform(1280, 720, 640, 640);
     CHECK(approxEqual(t.scale, 0.5f));
     CHECK(approxEqual(t.padX, 0.0f));
     CHECK(approxEqual(t.padY, 140.0f));
 }
 
 void test_computeLetterboxTransform_tallFrame() {
-    const LetterboxTransform t = computeLetterboxTransform(720, 1280, 640);
+    const LetterboxTransform t = computeLetterboxTransform(720, 1280, 640, 640);
     CHECK(approxEqual(t.scale, 0.5f));
     CHECK(approxEqual(t.padX, 140.0f));
     CHECK(approxEqual(t.padY, 0.0f));
+}
+
+void test_computeLetterboxTransform_nonSquareTarget() {
+    // 1280x720 source into a 960x576 (non-square) target.
+    // scale = min(960/1280, 576/720) = min(0.75, 0.8) = 0.75
+    // scaledWidth=960, scaledHeight=540 -> padX=0, padY=(576-540)/2=18
+    const LetterboxTransform t = computeLetterboxTransform(1280, 720, 960, 576);
+    CHECK(approxEqual(t.scale, 0.75f));
+    CHECK(approxEqual(t.padX, 0.0f));
+    CHECK(approxEqual(t.padY, 18.0f));
 }
 
 void test_computeIoU_identical() {
@@ -221,6 +231,7 @@ void test_extractClassNames_malformedReturnsEmpty() {
 int main() {
     test_computeLetterboxTransform_wideFrame();
     test_computeLetterboxTransform_tallFrame();
+    test_computeLetterboxTransform_nonSquareTarget();
     test_computeIoU_identical();
     test_computeIoU_disjoint();
     test_computeIoU_partialOverlap();
