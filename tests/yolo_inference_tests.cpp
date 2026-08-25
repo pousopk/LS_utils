@@ -1,5 +1,6 @@
 #include "manager/classification_inference.hpp"
 #include "manager/onnx_metadata.hpp"
+#include "manager/onnx_runtime_env.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <array>
@@ -315,6 +316,25 @@ void test_extractPreprocessingHints_disabledPixelNormalizationKeepsDefault() {
     CHECK(approxEqual(hints.inputScale, 1.0f / 255.0f));
 }
 
+void test_hwcBgrToNchwFloat_correctChannelOrderAndScale() {
+    // 1x2 BGR image: pixel(0,0)=(B10,G20,R30), pixel(0,1)=(B40,G50,R60).
+    cv::Mat bgr(1, 2, CV_8UC3);
+    bgr.at<cv::Vec3b>(0, 0) = cv::Vec3b(10, 20, 30);
+    bgr.at<cv::Vec3b>(0, 1) = cv::Vec3b(40, 50, 60);
+
+    const auto chw = hwcBgrToNchwFloat(bgr, 2.0f);
+    CHECK(chw.size() == 6);
+    // R plane (channel 0): 30*2, 60*2
+    CHECK(approxEqual(chw[0], 60.0f));
+    CHECK(approxEqual(chw[1], 120.0f));
+    // G plane (channel 1): 20*2, 50*2
+    CHECK(approxEqual(chw[2], 40.0f));
+    CHECK(approxEqual(chw[3], 100.0f));
+    // B plane (channel 2): 10*2, 40*2
+    CHECK(approxEqual(chw[4], 20.0f));
+    CHECK(approxEqual(chw[5], 80.0f));
+}
+
 } // namespace
 
 int main() {
@@ -341,6 +361,7 @@ int main() {
     test_extractPreprocessingHints_atl400Style();
     test_extractPreprocessingHints_detracStyle();
     test_extractPreprocessingHints_disabledPixelNormalizationKeepsDefault();
+    test_hwcBgrToNchwFloat_correctChannelOrderAndScale();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
