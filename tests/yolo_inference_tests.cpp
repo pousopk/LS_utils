@@ -1,4 +1,5 @@
 #include "manager/classification_inference.hpp"
+#include "manager/classification_metrics.hpp"
 #include "manager/detection_metrics.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/onnx_metadata.hpp"
@@ -485,6 +486,27 @@ void test_computeDetectionMetrics_excludesClassWithNoGroundTruth() {
     CHECK(approxEqual(metrics.meanAveragePrecision, 1.0f));
 }
 
+void test_computeClassificationMetrics_accuracyAndConfusionMatrix() {
+    std::vector<ClassificationEvaluationItem> items = {
+        {"cat", "cat"},   // correct
+        {"dog", "cat"},   // wrong
+        {"dog", "dog"},   // correct
+    };
+
+    const ClassificationMetrics metrics = computeClassificationMetrics(items);
+    CHECK(metrics.totalEvaluated == 3);
+    CHECK(approxEqual(metrics.accuracy, 2.0f / 3.0f));
+    CHECK(metrics.confusionMatrix.at("cat").at("cat") == 1);
+    CHECK(metrics.confusionMatrix.at("cat").at("dog") == 1);
+    CHECK(metrics.confusionMatrix.at("dog").at("dog") == 1);
+}
+
+void test_computeClassificationMetrics_emptyIsZeroAccuracy() {
+    const ClassificationMetrics metrics = computeClassificationMetrics({});
+    CHECK(metrics.totalEvaluated == 0);
+    CHECK(approxEqual(metrics.accuracy, 0.0f));
+}
+
 } // namespace
 
 int main() {
@@ -522,6 +544,8 @@ int main() {
     test_computeDetectionMetrics_perfectDetectorIsApOne();
     test_computeDetectionMetrics_noOverlapIsApZero();
     test_computeDetectionMetrics_excludesClassWithNoGroundTruth();
+    test_computeClassificationMetrics_accuracyAndConfusionMatrix();
+    test_computeClassificationMetrics_emptyIsZeroAccuracy();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
