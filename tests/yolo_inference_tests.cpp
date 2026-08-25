@@ -1,3 +1,4 @@
+#include "manager/classification_inference.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <array>
@@ -106,6 +107,49 @@ void test_computeBoxAgreement_matchesOverlappingSameClass() {
     CHECK(agreement.totalB == 2);
 }
 
+cv::Mat makeClassificationOutput(const std::vector<float>& probabilities) {
+    cv::Mat output(1, static_cast<int>(probabilities.size()), CV_32F);
+    for (size_t i = 0; i < probabilities.size(); ++i) {
+        output.at<float>(0, static_cast<int>(i)) = probabilities[i];
+    }
+    return output;
+}
+
+void test_decodeClassificationOutput_sortsDescending() {
+    const cv::Mat output = makeClassificationOutput({0.05f, 0.5f, 0.3f, 0.15f});
+    const auto predictions = decodeClassificationOutput(output, {"a", "b", "c", "d"});
+
+    CHECK(predictions.size() == 4);
+    CHECK(predictions[0].classId == 1 && predictions[0].className == "b");
+    CHECK(approxEqual(predictions[0].probability, 0.5f));
+    CHECK(predictions[1].classId == 2 && predictions[1].className == "c");
+    CHECK(predictions[2].classId == 3 && predictions[2].className == "d");
+    CHECK(predictions[3].classId == 0 && predictions[3].className == "a");
+}
+
+void test_decodeClassificationOutput_rejectsBadSum() {
+    const cv::Mat output = makeClassificationOutput({10.0f, 20.0f, 5.0f, 5.0f}); // sums to 40, not ~1.0
+    bool threw = false;
+    try {
+        decodeClassificationOutput(output, {"a", "b", "c", "d"});
+    } catch (const cv::Exception&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+void test_decodeClassificationOutput_rejectsWrongShape() {
+    int sizes[] = {1, 4, 10};
+    cv::Mat output(3, sizes, CV_32F, cv::Scalar(0.0f));
+    bool threw = false;
+    try {
+        decodeClassificationOutput(output, {});
+    } catch (const cv::Exception&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
 } // namespace
 
 int main() {
@@ -116,6 +160,9 @@ int main() {
     test_computeIoU_partialOverlap();
     test_decodeYoloOutput_confidenceAndNms();
     test_computeBoxAgreement_matchesOverlappingSameClass();
+    test_decodeClassificationOutput_sortsDescending();
+    test_decodeClassificationOutput_rejectsBadSum();
+    test_decodeClassificationOutput_rejectsWrongShape();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
