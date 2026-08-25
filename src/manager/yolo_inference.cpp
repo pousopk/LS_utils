@@ -193,9 +193,21 @@ std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshol
     net_.setInput(blob);
     cv::Mat rawOutput = net_.forward();
 
-    // Ultralytics v8/v11 export shape: [1, 4+numClasses, numBoxes]. Reshape
-    // to [4+numClasses, numBoxes] and transpose to [numBoxes, 4+numClasses]
-    // so each row is one candidate box, matching decodeYoloOutput's input.
+    // Ultralytics v8/v11 export shape: [1, 4+numClasses, numBoxes]. Reject
+    // anything else up front -- a classification/regression head or an
+    // end2end/NMS-baked export won't have this shape, and reading
+    // rawOutput.size[2] on a Mat with fewer than 3 dims is undefined
+    // behavior rather than a catchable error.
+    if (rawOutput.dims != 3 || rawOutput.size[0] != 1) {
+        CV_Error(cv::Error::StsError,
+            "Unexpected model output shape (expected [1, 4+numClasses, numBoxes]) -- "
+            "this model may not be a standard YOLO detector (e.g. a classification "
+            "or regression head, or an NMS-baked/end2end export)");
+    }
+
+    // Reshape to [4+numClasses, numBoxes] and transpose to
+    // [numBoxes, 4+numClasses] so each row is one candidate box, matching
+    // decodeYoloOutput's input.
     cv::Mat output(rawOutput.size[1], rawOutput.size[2], CV_32F, rawOutput.ptr<float>());
     cv::Mat transposed;
     cv::transpose(output, transposed);
