@@ -1,11 +1,12 @@
 #pragma once
 
 #include "manager/onnx_metadata.hpp"
+#include "manager/onnx_runtime_env.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <opencv2/core.hpp>
-#include <opencv2/dnn.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@ public:
 
     bool isValid() const { return valid_; }
 
+    // True if this model's session is using the CUDA execution provider
+    // (only meaningful once isValid() is true).
+    bool isGpuActive() const { return gpuActive_; }
+
     // Runs resize (or letterbox, per hints.maintainAspectRatio) -> forward
     // pass -> decode on `frame`, returning all classes sorted by
     // probability descending. Returns an empty vector if the model isn't
@@ -57,10 +62,13 @@ public:
     std::vector<ClassPrediction> infer(const cv::Mat& frame);
 
 private:
-    cv::dnn::Net net_;
+    std::unique_ptr<Ort::Session> session_;
+    std::string inputName_;
+    std::string outputName_;
     std::vector<std::string> classNames_;
     int inputWidth_ = 224;
     int inputHeight_ = 224;
     OnnxPreprocessingHints hints_;
+    bool gpuActive_ = false;
     bool valid_ = false;
 };
