@@ -1,5 +1,8 @@
 #pragma once
 
+#include "manager/onnx_metadata.hpp"
+#include "manager/yolo_inference.hpp"
+
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
 
@@ -31,21 +34,26 @@ public:
     // this class's. `inputWidth`/`inputHeight` must match what the model
     // was exported with -- unlike detection, classifiers don't share one
     // fixed size (real examples found at 448x576 and 576x960), so
-    // there's no safe default to fall back to. On failure, isValid() is
-    // false and errorOut holds a human-readable reason -- construction
-    // never throws.
+    // there's no safe default to fall back to. `hints` controls
+    // preprocessing (pixel scale, and -- when
+    // hints.maintainAspectRatio -- letterbox padding instead of this
+    // class's default plain resize). On failure, isValid() is false and
+    // errorOut holds a human-readable reason -- construction never
+    // throws.
     ClassificationModel(
         const std::string& onnxPath,
         const std::vector<std::string>& classNames,
         int inputWidth,
         int inputHeight,
+        const OnnxPreprocessingHints& hints,
         std::string& errorOut);
 
     bool isValid() const { return valid_; }
 
-    // Runs resize -> forward pass -> decode on `frame`, returning all
-    // classes sorted by probability descending. Returns an empty vector
-    // if the model isn't valid or `frame` is empty.
+    // Runs resize (or letterbox, per hints.maintainAspectRatio) -> forward
+    // pass -> decode on `frame`, returning all classes sorted by
+    // probability descending. Returns an empty vector if the model isn't
+    // valid or `frame` is empty.
     std::vector<ClassPrediction> infer(const cv::Mat& frame);
 
 private:
@@ -53,5 +61,6 @@ private:
     std::vector<std::string> classNames_;
     int inputWidth_ = 224;
     int inputHeight_ = 224;
+    OnnxPreprocessingHints hints_;
     bool valid_ = false;
 };

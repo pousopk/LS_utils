@@ -5,7 +5,8 @@
 
 #include <algorithm>
 
-LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int targetWidth, int targetHeight) {
+LetterboxTransform computeLetterboxTransform(
+    int origWidth, int origHeight, int targetWidth, int targetHeight, bool centerPadding) {
     const float scale = std::min(
         static_cast<float>(targetWidth) / static_cast<float>(origWidth),
         static_cast<float>(targetHeight) / static_cast<float>(origHeight));
@@ -14,16 +15,22 @@ LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int 
 
     LetterboxTransform transform;
     transform.scale = scale;
-    transform.padX = (targetWidth - scaledWidth) / 2.0f;
-    transform.padY = (targetHeight - scaledHeight) / 2.0f;
+    if (centerPadding) {
+        transform.padX = (targetWidth - scaledWidth) / 2.0f;
+        transform.padY = (targetHeight - scaledHeight) / 2.0f;
+    } else {
+        transform.padX = 0.0f;
+        transform.padY = 0.0f;
+    }
     return transform;
 }
 
-cv::Mat letterboxResize(const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform) {
+cv::Mat letterboxResize(
+    const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform, float fillValue) {
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(), transform.scale, transform.scale);
 
-    cv::Mat canvas(targetHeight, targetWidth, frame.type(), cv::Scalar(114, 114, 114));
+    cv::Mat canvas(targetHeight, targetWidth, frame.type(), cv::Scalar(fillValue, fillValue, fillValue));
     resized.copyTo(canvas(cv::Rect(
         static_cast<int>(transform.padX),
         static_cast<int>(transform.padY),
@@ -149,8 +156,9 @@ YoloModel::YoloModel(
     const std::vector<std::string>& classNames,
     int inputWidth,
     int inputHeight,
+    const OnnxPreprocessingHints& hints,
     std::string& errorOut)
-    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight) {
+    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight), hints_(hints) {
     try {
         net_ = cv::dnn::readNetFromONNX(onnxPath);
     } catch (const cv::Exception& e) {
@@ -169,11 +177,12 @@ std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshol
         return {};
     }
 
-    const LetterboxTransform transform = computeLetterboxTransform(frame.cols, frame.rows, inputWidth_, inputHeight_);
-    const cv::Mat letterboxed = letterboxResize(frame, inputWidth_, inputHeight_, transform);
+    const LetterboxTransform transform = computeLetterboxTransform(
+        frame.cols, frame.rows, inputWidth_, inputHeight_, hints_.padCenter);
+    const cv::Mat letterboxed = letterboxResize(frame, inputWidth_, inputHeight_, transform, hints_.padFill);
 
     cv::Mat blob = cv::dnn::blobFromImage(
-        letterboxed, 1.0 / 255.0, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
+        letterboxed, hints_.inputScale, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
     net_.setInput(blob);
     cv::Mat rawOutput = net_.forward();
 

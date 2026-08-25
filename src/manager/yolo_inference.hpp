@@ -1,5 +1,7 @@
 #pragma once
 
+#include "manager/onnx_metadata.hpp"
+
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
 
@@ -23,13 +25,20 @@ struct LetterboxTransform {
     float padY = 0.0f;
 };
 
-LetterboxTransform computeLetterboxTransform(int origWidth, int origHeight, int targetWidth, int targetHeight);
+// `centerPadding` true (default) centers the scaled image in the target
+// canvas; false anchors it top-left (per a model's `padding` metadata
+// declaring position "top_left") -- padX/padY are then both 0.
+LetterboxTransform computeLetterboxTransform(
+    int origWidth, int origHeight, int targetWidth, int targetHeight, bool centerPadding = true);
 
 // Resizes+pads `frame` into a `targetWidth` x `targetHeight` canvas per
 // `transform`, ready to feed to cv::dnn::blobFromImage. `targetWidth`
 // and `targetHeight` need not be equal -- non-square model inputs are
-// supported.
-cv::Mat letterboxResize(const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform);
+// supported. `fillValue` (0-255, replicated across channels) fills the
+// padding border.
+cv::Mat letterboxResize(
+    const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform,
+    float fillValue = 114.0f);
 
 float computeIoU(const cv::Rect& a, const cv::Rect& b);
 
@@ -71,11 +80,16 @@ public:
     // model was exported with. On failure, isValid() is false and
     // errorOut holds a human-readable reason -- construction never
     // throws.
+    // `hints` controls preprocessing (pixel scale, letterbox fill/anchor)
+    // -- pass a default-constructed OnnxPreprocessingHints for the
+    // standard Ultralytics convention, or the result of
+    // extractPreprocessingHints() for a model that declares otherwise.
     YoloModel(
         const std::string& onnxPath,
         const std::vector<std::string>& classNames,
         int inputWidth,
         int inputHeight,
+        const OnnxPreprocessingHints& hints,
         std::string& errorOut);
 
     bool isValid() const { return valid_; }
@@ -90,5 +104,6 @@ private:
     std::vector<std::string> classNames_;
     int inputWidth_ = 640;
     int inputHeight_ = 640;
+    OnnxPreprocessingHints hints_;
     bool valid_ = false;
 };

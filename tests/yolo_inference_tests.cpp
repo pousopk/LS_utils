@@ -226,6 +226,95 @@ void test_extractClassNames_malformedReturnsEmpty() {
     CHECK(extractClassNames(model).empty());
 }
 
+void test_extractClassNames_categoriesFormat() {
+    // Real metadata string from ATL400-inspection-1-v1.onnx.
+    onnx::ModelProto model;
+    auto* prop = model.add_metadata_props();
+    prop->set_key("categories");
+    prop->set_value(
+        "[{'id': 'f641d7e2-1688-40b6-b51b-190e94c984e7', 'name': 'Racor derecha', 'threshold': 0.05}, "
+        "{'id': 'a3c65866-17d2-4795-8f7b-5b3c310e4e35', 'name': 'Racor mal posicionado', 'threshold': 0.6}, "
+        "{'id': '49f08870-9f51-482a-9be6-3fc318b776ef', 'name': 'Racor izquierda', 'threshold': 0.3}, "
+        "{'id': 'b0fe2492-69d1-4048-9d0b-6a481e55aaa5', 'name': 'No racor', 'threshold': 0.05}]");
+
+    const auto names = extractClassNames(model);
+    CHECK(names.size() == 4);
+    CHECK(names[0] == "Racor derecha");
+    CHECK(names[1] == "Racor mal posicionado");
+    CHECK(names[2] == "Racor izquierda");
+    CHECK(names[3] == "No racor");
+}
+
+void test_extractClassNames_prefersNamesOverCategories() {
+    onnx::ModelProto model;
+    auto* namesProp = model.add_metadata_props();
+    namesProp->set_key("names");
+    namesProp->set_value("{0: 'a', 1: 'b'}");
+    auto* categoriesProp = model.add_metadata_props();
+    categoriesProp->set_key("categories");
+    categoriesProp->set_value("[{'name': 'x'}, {'name': 'y'}]");
+
+    const auto names = extractClassNames(model);
+    CHECK(names.size() == 2);
+    CHECK(names[0] == "a");
+    CHECK(names[1] == "b");
+}
+
+void test_extractPreprocessingHints_defaultsWhenAbsent() {
+    onnx::ModelProto model;
+    const OnnxPreprocessingHints hints = extractPreprocessingHints(model);
+    CHECK(approxEqual(hints.inputScale, 1.0f / 255.0f));
+    CHECK(approxEqual(hints.padFill, 114.0f));
+    CHECK(hints.padCenter == true);
+    CHECK(hints.maintainAspectRatio == false);
+}
+
+void test_extractPreprocessingHints_atl400Style() {
+    // Real metadata strings from ATL400-inspection-1-v1.onnx.
+    onnx::ModelProto model;
+    auto* pixelNorm = model.add_metadata_props();
+    pixelNorm->set_key("pixel_normalization");
+    pixelNorm->set_value("{'min_value': 0, 'max_value': 255}");
+    auto* padding = model.add_metadata_props();
+    padding->set_key("padding");
+    padding->set_value("{'type': 'constant', 'position': 'top_left', 'fill': 0.0}");
+
+    const OnnxPreprocessingHints hints = extractPreprocessingHints(model);
+    CHECK(approxEqual(hints.inputScale, 1.0f));
+    CHECK(approxEqual(hints.padFill, 0.0f));
+    CHECK(hints.padCenter == false);
+}
+
+void test_extractPreprocessingHints_detracStyle() {
+    // Real metadata strings from detrac_tiny_int.onnx.
+    onnx::ModelProto model;
+    auto* pixelNorm = model.add_metadata_props();
+    pixelNorm->set_key("pixel_normalization");
+    pixelNorm->set_value("{'enabled': True, 'value': 255}");
+    auto* padding = model.add_metadata_props();
+    padding->set_key("padding");
+    padding->set_value("{'type': 'constant', 'position': 'center', 'fill': 0.0}");
+    auto* maintainAspect = model.add_metadata_props();
+    maintainAspect->set_key("maintain_aspect_ratio");
+    maintainAspect->set_value("True");
+
+    const OnnxPreprocessingHints hints = extractPreprocessingHints(model);
+    CHECK(approxEqual(hints.inputScale, 1.0f));
+    CHECK(approxEqual(hints.padFill, 0.0f));
+    CHECK(hints.padCenter == true);
+    CHECK(hints.maintainAspectRatio == true);
+}
+
+void test_extractPreprocessingHints_disabledPixelNormalizationKeepsDefault() {
+    onnx::ModelProto model;
+    auto* pixelNorm = model.add_metadata_props();
+    pixelNorm->set_key("pixel_normalization");
+    pixelNorm->set_value("{'enabled': False, 'value': 255}");
+
+    const OnnxPreprocessingHints hints = extractPreprocessingHints(model);
+    CHECK(approxEqual(hints.inputScale, 1.0f / 255.0f));
+}
+
 } // namespace
 
 int main() {
@@ -246,6 +335,12 @@ int main() {
     test_extractClassNames_valid();
     test_extractClassNames_missingReturnsEmpty();
     test_extractClassNames_malformedReturnsEmpty();
+    test_extractClassNames_categoriesFormat();
+    test_extractClassNames_prefersNamesOverCategories();
+    test_extractPreprocessingHints_defaultsWhenAbsent();
+    test_extractPreprocessingHints_atl400Style();
+    test_extractPreprocessingHints_detracStyle();
+    test_extractPreprocessingHints_disabledPixelNormalizationKeepsDefault();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

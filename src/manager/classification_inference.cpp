@@ -51,8 +51,9 @@ ClassificationModel::ClassificationModel(
     const std::vector<std::string>& classNames,
     int inputWidth,
     int inputHeight,
+    const OnnxPreprocessingHints& hints,
     std::string& errorOut)
-    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight) {
+    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight), hints_(hints) {
     try {
         net_ = cv::dnn::readNetFromONNX(onnxPath);
     } catch (const cv::Exception& e) {
@@ -71,11 +72,17 @@ std::vector<ClassPrediction> ClassificationModel::infer(const cv::Mat& frame) {
         return {};
     }
 
-    cv::Mat resized;
-    cv::resize(frame, resized, cv::Size(inputWidth_, inputHeight_));
+    cv::Mat prepared;
+    if (hints_.maintainAspectRatio) {
+        const LetterboxTransform transform = computeLetterboxTransform(
+            frame.cols, frame.rows, inputWidth_, inputHeight_, hints_.padCenter);
+        prepared = letterboxResize(frame, inputWidth_, inputHeight_, transform, hints_.padFill);
+    } else {
+        cv::resize(frame, prepared, cv::Size(inputWidth_, inputHeight_));
+    }
 
     cv::Mat blob = cv::dnn::blobFromImage(
-        resized, 1.0 / 255.0, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
+        prepared, hints_.inputScale, cv::Size(inputWidth_, inputHeight_), cv::Scalar(), true, false);
     net_.setInput(blob);
     cv::Mat output = net_.forward();
 

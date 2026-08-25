@@ -17,13 +17,15 @@ struct ModelAutoDetectResult {
     int inputHeight = 0;
     DetectedTaskMode suggestedMode = DetectedTaskMode::Unknown;
     std::vector<std::string> classNames;
+    OnnxPreprocessingHints hints;
     std::string error;
 };
 
-// Reads an ONNX model's declared input shape and embedded class names
-// (via onnx_metadata), then -- if a shape was found -- runs one cheap
-// dummy forward pass at that shape to guess whether it's a detector or a
-// classifier from the output tensor's rank. A failed shape read sets
-// `error`; a failed/ambiguous mode guess just leaves suggestedMode at
-// Unknown (not an error -- shape detection alone is still useful).
+// Reads an ONNX model's declared input shape, preprocessing hints, and
+// embedded class names (via onnx_metadata), then -- if a shape was found
+// -- runs one cheap dummy forward pass at that shape to guess whether
+// it's a detector or a classifier from the output tensor's rank. A failed
+// shape read sets `error`; a failed/ambiguous mode guess just leaves
+// suggestedMode at Unknown (not an error -- shape detection alone is
+// still useful).
 ModelAutoDetectResult autoDetectModel(const std::string& onnxPath);

@@ -24,6 +24,7 @@ ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
     result.inputWidth = shape.width;
     result.inputHeight = shape.height;
     result.classNames = extractClassNames(model);
+    result.hints = extractPreprocessingHints(model);
 
     try {
         cv::dnn::Net net = cv::dnn::readNetFromONNX(onnxPath);
@@ -32,7 +33,7 @@ ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
         }
         cv::Mat blankFrame = cv::Mat::zeros(shape.height, shape.width, CV_8UC3);
         cv::Mat blob = cv::dnn::blobFromImage(
-            blankFrame, 1.0 / 255.0, cv::Size(shape.width, shape.height), cv::Scalar(), true, false);
+            blankFrame, result.hints.inputScale, cv::Size(shape.width, shape.height), cv::Scalar(), true, false);
         net.setInput(blob);
         cv::Mat output = net.forward();
 

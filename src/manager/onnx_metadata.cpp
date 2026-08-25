@@ -3,6 +3,7 @@
 #include <cctype>
 #include <fstream>
 #include <map>
+#include <optional>
 
 bool loadOnnxModelProto(const std::string& path, onnx::ModelProto& out, std::string& errorOut) {
     std::ifstream file(path, std::ios::binary);
@@ -100,13 +101,184 @@ std::vector<std::string> parseNamesDict(const std::string& text) {
     }
     return names;
 }
+std::vector<std::string> parseCategoriesList(const std::string& text) {
+    std::vector<std::string> names;
+    size_t pos = 0;
+    while (true) {
+        pos = text.find("'name'", pos);
+        if (pos == std::string::npos) {
+            break;
+        }
+        pos = text.find(':', pos);
+        if (pos == std::string::npos) {
+            break;
+        }
+        ++pos;
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+        if (pos >= text.size() || (text[pos] != '\'' && text[pos] != '"')) {
+            break;
+        }
+        const char quote = text[pos];
+        ++pos;
+        const size_t valueEnd = text.find(quote, pos);
+        if (valueEnd == std::string::npos) {
+            break;
+        }
+        names.push_back(text.substr(pos, valueEnd - pos));
+        pos = valueEnd + 1;
+    }
+    return names;
+}
+
+// Finds 'key': <value> inside a Python-dict-repr string and returns the
+// raw text immediately after the colon, up to the next top-level ',' or
+// closing bracket (trimmed). Returns nullopt if the key isn't found.
+std::optional<std::string> findRawValueAfterKey(const std::string& text, const std::string& key) {
+    const std::string pattern = "'" + key + "'";
+    size_t pos = text.find(pattern);
+    if (pos == std::string::npos) {
+        return std::nullopt;
+    }
+    pos = text.find(':', pos + pattern.size());
+    if (pos == std::string::npos) {
+        return std::nullopt;
+    }
+    ++pos;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+
+    size_t end = pos;
+    int depth = 0;
+    while (end < text.size()) {
+        const char c = text[end];
+        if (c == '{' || c == '[') {
+            ++depth;
+        } else if (c == '}' || c == ']') {
+            if (depth == 0) {
+                break;
+            }
+            --depth;
+        } else if (c == ',' && depth == 0) {
+            break;
+        }
+        ++end;
+    }
+
+    std::string raw = text.substr(pos, end - pos);
+    while (!raw.empty() && std::isspace(static_cast<unsigned char>(raw.back()))) {
+        raw.pop_back();
+    }
+    return raw;
+}
+
+std::optional<double> parseNumber(const std::string& raw) {
+    try {
+        size_t idx = 0;
+        const double value = std::stod(raw, &idx);
+        return value;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<bool> parseBool(const std::string& raw) {
+    if (raw == "True") {
+        return true;
+    }
+    if (raw == "False") {
+        return false;
+    }
+    return std::nullopt;
+}
+
+std::string parseQuotedString(const std::string& raw) {
+    if (raw.size() >= 2 && (raw.front() == '\'' || raw.front() == '"') && raw.back() == raw.front()) {
+        return raw.substr(1, raw.size() - 2);
+    }
+    return raw;
+}
+
 } // namespace
 
 std::vector<std::string> extractClassNames(const onnx::ModelProto& model) {
     for (const auto& prop : model.metadata_props()) {
         if (prop.key() == "names") {
-            return parseNamesDict(prop.value());
+            if (auto names = parseNamesDict(prop.value()); !names.empty()) {
+                return names;
+            }
+        }
+    }
+    for (const auto& prop : model.metadata_props()) {
+        if (prop.key() == "categories") {
+            if (auto names = parseCategoriesList(prop.value()); !names.empty()) {
+                return names;
+            }
         }
     }
     return {};
+}
+
+OnnxPreprocessingHints extractPreprocessingHints(const onnx::ModelProto& model) {
+    OnnxPreprocessingHints hints;
+
+    std::string pixelNormalization;
+    std::string padding;
+    std::string maintainAspectRatio;
+    for (const auto& prop : model.metadata_props()) {
+        if (prop.key() == "pixel_normalization") {
+            pixelNormalization = prop.value();
+        } else if (prop.key() == "padding") {
+            padding = prop.value();
+        } else if (prop.key() == "maintain_aspect_ratio") {
+            maintainAspectRatio = prop.value();
+        }
+    }
+
+    if (!pixelNormalization.empty()) {
+        bool rawPixelRange = false;
+        if (auto maxValue = findRawValueAfterKey(pixelNormalization, "max_value")) {
+            if (auto v = parseNumber(*maxValue); v && *v > 1.0) {
+                rawPixelRange = true;
+            }
+        }
+        if (auto value = findRawValueAfterKey(pixelNormalization, "value")) {
+            if (auto v = parseNumber(*value); v && *v > 1.0) {
+                const auto enabled = findRawValueAfterKey(pixelNormalization, "enabled");
+                const bool isEnabled = !enabled || parseBool(*enabled).value_or(true);
+                if (isEnabled) {
+                    rawPixelRange = true;
+                }
+            }
+        }
+        if (rawPixelRange) {
+            hints.inputScale = 1.0f;
+        }
+    }
+
+    if (!padding.empty()) {
+        if (auto position = findRawValueAfterKey(padding, "position")) {
+            const std::string pos = parseQuotedString(*position);
+            if (pos == "top_left") {
+                hints.padCenter = false;
+            } else if (pos == "center") {
+                hints.padCenter = true;
+            }
+        }
+        if (auto fill = findRawValueAfterKey(padding, "fill")) {
+            if (auto v = parseNumber(*fill)) {
+                hints.padFill = static_cast<float>(*v);
+            }
+        }
+    }
+
+    if (!maintainAspectRatio.empty()) {
+        if (auto v = parseBool(maintainAspectRatio)) {
+            hints.maintainAspectRatio = *v;
+        }
+    }
+
+    return hints;
 }
