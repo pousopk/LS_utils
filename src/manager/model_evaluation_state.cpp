@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 
 namespace {
@@ -175,6 +176,36 @@ cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& d
     return annotated;
 }
 
+cv::Mat annotateAnomalyHeatmap(const cv::Mat& frame, const AnomalyResult& result) {
+    cv::Mat annotated = frame.clone();
+    if (!result.heatmap.empty()) {
+        cv::Mat normalized;
+        cv::normalize(result.heatmap, normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
+        cv::Mat colorized;
+        cv::applyColorMap(normalized, colorized, cv::COLORMAP_JET);
+        cv::addWeighted(annotated, 0.6, colorized, 0.4, 0.0, annotated);
+    }
+
+    const float scale = std::clamp(static_cast<float>(frame.cols) / 800.0f, 1.0f, 3.0f);
+    const int textThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
+    const double fontScale = 0.85 * scale;
+    const cv::Scalar color = result.isAnomalous ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
+
+    char buffer[64];
+    std::snprintf(
+        buffer, sizeof(buffer), "Score: %.2f -- %s", result.score, result.isAnomalous ? "ANOMALOUS" : "normal");
+
+    int baseline = 0;
+    const cv::Size textSize = cv::getTextSize(buffer, cv::FONT_HERSHEY_SIMPLEX, fontScale, textThickness, &baseline);
+    cv::rectangle(
+        annotated, cv::Point(4, 4), cv::Point(4 + textSize.width + 4, 4 + textSize.height + baseline + 4),
+        cv::Scalar(0, 0, 0), cv::FILLED);
+    cv::putText(
+        annotated, buffer, cv::Point(6, 6 + textSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, color,
+        textThickness, cv::LINE_AA);
+    return annotated;
+}
+
 void updateLiveSlot(
     ComparisonTaskMode mode, const ModelSlotConfig& slot, LiveRuntimeSlot& liveSlot, const cv::Mat& frame) {
     if (liveSlot.texture == 0) {
@@ -193,6 +224,8 @@ void updateLiveSlot(
         }
         liveSlot.classificationWorker.reset();
         liveSlot.workerClassificationModel.reset();
+        liveSlot.anomalyWorker.reset();
+        liveSlot.workerAnomalyModel.reset();
 
         if (!liveSlot.worker) {
             return;
@@ -210,7 +243,7 @@ void updateLiveSlot(
                 uploadFrameToTexture(liveSlot.texture, annotated, liveSlot.textureWidth, liveSlot.textureHeight);
             }
         }
-    } else {
+    } else if (mode == ComparisonTaskMode::Classification) {
         if (liveSlot.workerClassificationModel != slot.classificationModel) {
             liveSlot.classificationWorker.reset();
             liveSlot.workerClassificationModel = slot.classificationModel;
@@ -223,6 +256,8 @@ void updateLiveSlot(
         }
         liveSlot.worker.reset();
         liveSlot.workerModel.reset();
+        liveSlot.anomalyWorker.reset();
+        liveSlot.workerAnomalyModel.reset();
 
         if (!liveSlot.classificationWorker) {
             return;
@@ -237,6 +272,37 @@ void updateLiveSlot(
             liveSlot.latestInferenceMs = result.inferenceMs;
             if (!frame.empty()) {
                 uploadFrameToTexture(liveSlot.texture, frame, liveSlot.textureWidth, liveSlot.textureHeight);
+            }
+        }
+    } else {
+        if (liveSlot.workerAnomalyModel != slot.anomalyModel) {
+            liveSlot.anomalyWorker.reset();
+            liveSlot.workerAnomalyModel = slot.anomalyModel;
+            liveSlot.latestAnomalyResult = AnomalyResult{};
+            liveSlot.runtimeError.clear();
+            if (slot.anomalyModel) {
+                liveSlot.anomalyWorker = std::make_unique<AnomalyInferenceWorker>(slot.anomalyModel);
+            }
+        }
+        liveSlot.worker.reset();
+        liveSlot.workerModel.reset();
+        liveSlot.classificationWorker.reset();
+        liveSlot.workerClassificationModel.reset();
+
+        if (!liveSlot.anomalyWorker) {
+            return;
+        }
+        if (!frame.empty() && liveSlot.anomalyWorker->isIdle()) {
+            liveSlot.anomalyWorker->submit(frame.clone(), slot.anomalyThreshold);
+        }
+        AnomalyInferenceWorker::Result result;
+        if (liveSlot.anomalyWorker->tryTakeResult(result)) {
+            liveSlot.runtimeError = result.error;
+            liveSlot.latestAnomalyResult = result.anomaly;
+            liveSlot.latestInferenceMs = result.inferenceMs;
+            if (!frame.empty()) {
+                const cv::Mat annotated = annotateAnomalyHeatmap(frame, liveSlot.latestAnomalyResult);
+                uploadFrameToTexture(liveSlot.texture, annotated, liveSlot.textureWidth, liveSlot.textureHeight);
             }
         }
     }
@@ -522,8 +588,11 @@ void resetModelEvaluationResults(ModelEvaluationState& state) {
         liveSlot.workerModel.reset();
         liveSlot.classificationWorker.reset();
         liveSlot.workerClassificationModel.reset();
+        liveSlot.anomalyWorker.reset();
+        liveSlot.workerAnomalyModel.reset();
         liveSlot.latestDetections.clear();
         liveSlot.latestPredictions.clear();
+        liveSlot.latestAnomalyResult = AnomalyResult{};
         liveSlot.runtimeError.clear();
     }
     state.live.latestAgreement = BoxAgreement{};

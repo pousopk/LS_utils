@@ -1,6 +1,7 @@
 #pragma once
 
 #include "manager/anomaly_inference.hpp"
+#include "manager/anomaly_worker.hpp"
 #include "manager/app_runtime.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
@@ -92,6 +93,10 @@ struct LiveRuntimeSlot {
     std::unique_ptr<ClassificationInferenceWorker> classificationWorker;
     std::shared_ptr<ClassificationModel> workerClassificationModel;
     std::vector<ClassPrediction> latestPredictions;
+
+    std::unique_ptr<AnomalyInferenceWorker> anomalyWorker;
+    std::shared_ptr<AnomalyModel> workerAnomalyModel;
+    AnomalyResult latestAnomalyResult;
 
     std::string runtimeError;
 };
