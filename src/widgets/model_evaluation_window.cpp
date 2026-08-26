@@ -32,6 +32,13 @@ void drawTaskModeToggle(ModelEvaluationState& state) {
             resetModelEvaluationResults(state);
         }
     }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Anomaly", state.taskMode == ComparisonTaskMode::Anomaly)) {
+        if (state.taskMode != ComparisonTaskMode::Anomaly) {
+            state.taskMode = ComparisonTaskMode::Anomaly;
+            resetModelEvaluationResults(state);
+        }
+    }
 }
 
 void drawModelCountToggle(ModelEvaluationState& state) {
@@ -87,6 +94,12 @@ void drawSlotConfig(ModelEvaluationState& state, int slotIndex) {
 
     if (!slot.engineStatus.empty()) {
         ImGui::TextDisabled("%s", slot.engineStatus.c_str());
+    }
+
+    if (state.taskMode == ComparisonTaskMode::Anomaly) {
+        ImGui::SliderFloat("Anomaly Threshold", &slot.anomalyThreshold, 0.0f, 1.0f, "%.2f");
+        ImGui::InputFloat("Score Min", &slot.anomalyScoreMin);
+        ImGui::InputFloat("Score Max", &slot.anomalyScoreMax);
     }
 
     if (loadClicked) {
@@ -227,6 +240,21 @@ void drawFolderAndGroundTruthPickers(ModelEvaluationState& state) {
     }
     if (!state.batch.groundTruthStatus.empty()) {
         ImGui::TextDisabled("%s", state.batch.groundTruthStatus.c_str());
+    }
+
+    ImGui::Checkbox("Randomly sample", &state.batch.sampleEnabled);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!state.batch.sampleEnabled);
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::InputInt("images##SampleSize", &state.batch.sampleSize);
+    ImGui::EndDisabled();
+    if (state.batch.sampleSize < 1) {
+        state.batch.sampleSize = 1;
+    }
+    if (state.batch.sampleEnabled) {
+        ImGui::TextDisabled(
+            "Evaluates a random subset instead of the whole folder -- useful for a quick check on a huge "
+            "dataset.");
     }
 }
 
@@ -508,7 +536,7 @@ void drawAggregateMetrics(ModelEvaluationState& state) {
 }
 
 void drawImageList(ModelEvaluationState& state) {
-    ImGui::BeginChild("BatchEvalImageList", ImVec2(280.0f, 380.0f), true);
+    ImGui::BeginChild("BatchEvalImageList", ImVec2(280.0f, 640.0f), true);
     ImGui::BeginDisabled(!state.batch.hasGroundTruth);
     ImGui::Checkbox("Mismatches only", &state.batch.mismatchesOnly);
     ImGui::EndDisabled();
@@ -531,6 +559,17 @@ void drawImageList(ModelEvaluationState& state) {
     ImGui::SliderFloat("Threshold", &state.batch.confidenceFilterThreshold, 0.0f, 1.0f, "%.2f");
     ImGui::EndDisabled();
 
+    if (state.taskMode == ComparisonTaskMode::Detection) {
+        static const char* kDetectionPresenceLabels[] = {"Any", "Has detections", "No detections"};
+        int detectionPresenceIndex = static_cast<int>(state.batch.detectionPresenceFilter);
+        if (ImGui::Combo(
+                "Detections", &detectionPresenceIndex, kDetectionPresenceLabels,
+                IM_ARRAYSIZE(kDetectionPresenceLabels))) {
+            state.batch.detectionPresenceFilter =
+                static_cast<BatchEvalDetectionPresenceFilter>(detectionPresenceIndex);
+        }
+    }
+
     std::vector<std::string> filenames;
     for (const auto& image : state.batch.resultA.images) {
         if (!fileNameMatchesFilter(std::filesystem::path(image.imageFilename), state.batch.imageListFilter)) {
@@ -541,6 +580,9 @@ void drawImageList(ModelEvaluationState& state) {
             continue;
         }
         if (!batchEvalImagePassesConfidenceFilter(state.taskMode, state.batch, image.imageFilename)) {
+            continue;
+        }
+        if (!batchEvalImagePassesDetectionPresenceFilter(state.taskMode, state.batch, image.imageFilename)) {
             continue;
         }
         filenames.push_back(image.imageFilename);
@@ -647,7 +689,7 @@ void drawSlotPredictionText(ComparisonTaskMode mode, const BatchImageResult* ima
 
 void drawSelectedImageDetail(ModelEvaluationState& state) {
     ImGui::SameLine();
-    ImGui::BeginChild("BatchEvalImageDetail", ImVec2(0, 380.0f), true);
+    ImGui::BeginChild("BatchEvalImageDetail", ImVec2(0, 640.0f), true);
 
     if (!state.batch.selectedImageFilename) {
         ImGui::TextDisabled("Select an image to view details.");
@@ -669,8 +711,13 @@ void drawSelectedImageDetail(ModelEvaluationState& state) {
         const BatchPreviewTexture& preview = state.batch.previewTextures[static_cast<size_t>(i)];
         ImGui::TextUnformatted(i == 0 ? (state.compareTwoModels ? "Model A" : "Model") : "Model B");
         if (preview.previewTexture != 0 && preview.previewTextureWidth > 0 && preview.previewTextureHeight > 0) {
+            // Fill the available column width (single wide image, or half
+            // the pane per model when comparing two) rather than a small
+            // fixed size -- detection labels are unreadable when the whole
+            // photo is crushed down to a thumbnail.
+            const float maxWidth = ImGui::GetContentRegionAvail().x;
             const ImVec2 size =
-                fitImageToRegion(preview.previewTextureWidth, preview.previewTextureHeight, 300.0f, 220.0f);
+                fitImageToRegion(preview.previewTextureWidth, preview.previewTextureHeight, maxWidth, 520.0f);
             ImGui::Image((void*)(intptr_t)preview.previewTexture, size);
         } else {
             ImGui::TextDisabled("No preview.");
@@ -695,6 +742,11 @@ void drawBatchBody(ModelEvaluationState& state) {
 
     if (state.batch.runState == BatchEvalRunState::Complete) {
         ImGui::Separator();
+        if (state.batch.resultA.totalFilesInFolder > state.batch.resultA.imagesFound) {
+            ImGui::TextDisabled(
+                "Sampled %d of %d images in the folder.", state.batch.resultA.imagesFound,
+                state.batch.resultA.totalFilesInFolder);
+        }
         drawAggregateMetrics(state);
         ImGui::Separator();
         drawImageList(state);
@@ -801,7 +853,7 @@ void drawModelEvaluationWindow(bool* show, ModelEvaluationState& state, std::vec
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(1100.0f, 800.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1200.0f, 1000.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Model Evaluation", show)) {
         ImGui::End();
         return;
