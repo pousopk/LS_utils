@@ -41,6 +41,15 @@ cv::Mat letterboxResize(
     const cv::Mat& frame, int targetWidth, int targetHeight, const LetterboxTransform& transform,
     float fillValue = 114.0f);
 
+// Inverse of letterboxResize for a full raster (not point coordinates):
+// crops `mask` down to the `transform`-described unpadded region, then
+// resizes that crop to `origWidth` x `origHeight`. Companion to
+// computeLetterboxTransform/letterboxResize, used to map a model's
+// full-resolution output (e.g. an anomaly heatmap) back to original-
+// frame coordinates.
+cv::Mat unletterboxMask(
+    const cv::Mat& mask, const LetterboxTransform& transform, int origWidth, int origHeight);
+
 float computeIoU(const cv::Rect& a, const cv::Rect& b);
 
 // Decodes a raw Ultralytics YOLOv8/v11-style output tensor already reshaped

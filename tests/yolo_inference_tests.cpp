@@ -61,6 +61,43 @@ void test_computeLetterboxTransform_nonSquareTarget() {
     CHECK(approxEqual(t.padY, 18.0f));
 }
 
+void test_unletterboxMask_centeredPadding_cropsAndResizesBack() {
+    // 100x50 source into a 100x100 canvas: scale=1, padX=0, padY=25 --
+    // the "real" content occupies rows [25,75) of the 100x100 mask.
+    const LetterboxTransform transform = computeLetterboxTransform(100, 50, 100, 100);
+    cv::Mat mask(100, 100, CV_32F, cv::Scalar(0.0f));
+    mask(cv::Rect(0, 25, 100, 50)).setTo(cv::Scalar(5.0f));
+
+    const cv::Mat result = unletterboxMask(mask, transform, 100, 50);
+    CHECK(result.rows == 50);
+    CHECK(result.cols == 100);
+    CHECK(approxEqual(result.at<float>(0, 0), 5.0f));
+    CHECK(approxEqual(result.at<float>(49, 99), 5.0f));
+}
+
+void test_unletterboxMask_topLeftPadding_cropsFromOrigin() {
+    const LetterboxTransform transform = computeLetterboxTransform(100, 50, 100, 100, /*centerPadding=*/false);
+    cv::Mat mask(100, 100, CV_32F, cv::Scalar(9.0f));
+    mask(cv::Rect(0, 50, 100, 50)).setTo(cv::Scalar(-1.0f));  // padding region, should be cropped away
+
+    const cv::Mat result = unletterboxMask(mask, transform, 100, 50);
+    CHECK(result.rows == 50);
+    CHECK(result.cols == 100);
+    CHECK(approxEqual(result.at<float>(0, 0), 9.0f));
+    CHECK(approxEqual(result.at<float>(49, 0), 9.0f));
+}
+
+void test_unletterboxMask_resizesBackToOriginalDimensions() {
+    // 200x100 source into a 100x100 canvas: scale=0.5, padX=0, padY=25.
+    const LetterboxTransform transform = computeLetterboxTransform(200, 100, 100, 100);
+    cv::Mat mask(100, 100, CV_32F, cv::Scalar(3.0f));
+
+    const cv::Mat result = unletterboxMask(mask, transform, 200, 100);
+    CHECK(result.rows == 100);
+    CHECK(result.cols == 200);
+    CHECK(approxEqual(result.at<float>(50, 100), 3.0f));
+}
+
 void test_computeIoU_identical() {
     const cv::Rect r(0, 0, 10, 10);
     CHECK(approxEqual(computeIoU(r, r), 1.0f));
@@ -1244,6 +1281,9 @@ int main() {
     test_extractAnomalyScoreHints_malformedVadParamsIgnored();
     test_extractTaskHint_present();
     test_extractTaskHint_absentReturnsEmpty();
+    test_unletterboxMask_centeredPadding_cropsAndResizesBack();
+    test_unletterboxMask_topLeftPadding_cropsFromOrigin();
+    test_unletterboxMask_resizesBackToOriginalDimensions();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

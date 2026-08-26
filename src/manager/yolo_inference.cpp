@@ -39,6 +39,22 @@ cv::Mat letterboxResize(
     return canvas;
 }
 
+cv::Mat unletterboxMask(
+    const cv::Mat& mask, const LetterboxTransform& transform, int origWidth, int origHeight) {
+    const int scaledWidth = static_cast<int>(std::lround(origWidth * transform.scale));
+    const int scaledHeight = static_cast<int>(std::lround(origHeight * transform.scale));
+    const int padX = static_cast<int>(std::lround(transform.padX));
+    const int padY = static_cast<int>(std::lround(transform.padY));
+
+    const cv::Rect cropRect(padX, padY, scaledWidth, scaledHeight);
+    const cv::Rect boundedCrop = cropRect & cv::Rect(0, 0, mask.cols, mask.rows);
+    const cv::Mat cropped = mask(boundedCrop);
+
+    cv::Mat resized;
+    cv::resize(cropped, resized, cv::Size(origWidth, origHeight), 0, 0, cv::INTER_LINEAR);
+    return resized;
+}
+
 float computeIoU(const cv::Rect& a, const cv::Rect& b) {
     const cv::Rect intersection = a & b;
     const float intersectionArea = static_cast<float>(intersection.area());
