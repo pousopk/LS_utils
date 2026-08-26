@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/anomaly_inference.hpp"
 #include "manager/app_runtime.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
@@ -39,6 +40,10 @@ struct ModelSlotConfig {
 
     std::shared_ptr<YoloModel> detectionModel;
     std::shared_ptr<ClassificationModel> classificationModel;
+    std::shared_ptr<AnomalyModel> anomalyModel;
+    float anomalyScoreMin = 0.0f;
+    float anomalyScoreMax = 1.0f;
+    float anomalyThreshold = 0.5f;
     std::string loadError;
     std::string engineStatus;  // "Engine: GPU" / "Engine: CPU", set on successful load
 };
@@ -132,6 +137,15 @@ enum class BatchEvalConfidenceFilterMode {
     GreaterThan,
 };
 
+// Detection mode only -- whether an image produced at least one detected
+// box. Meaningless for classification (a run always produces a top-1
+// prediction unless inference itself failed), so it's ignored there.
+enum class BatchEvalDetectionPresenceFilter {
+    Any,
+    HasDetections,
+    NoDetections,
+};
+
 struct BatchPreviewTexture {
     GLuint previewTexture = 0;
     int previewTextureWidth = 0;
@@ -159,8 +173,15 @@ struct BatchRuntime {
     BatchEvalImageSortMode imageSortMode = BatchEvalImageSortMode::Filename;
     BatchEvalConfidenceFilterMode confidenceFilterMode = BatchEvalConfidenceFilterMode::None;
     float confidenceFilterThreshold = 0.5f;
+    BatchEvalDetectionPresenceFilter detectionPresenceFilter = BatchEvalDetectionPresenceFilter::Any;
     std::optional<std::string> selectedImageFilename;
     std::optional<std::string> renderedPreviewFilename;
+
+    // When enabled, only a random sampleSize-sized subset of the folder's
+    // images is evaluated -- useful for a quick look at a huge dataset
+    // with a slow CPU model instead of waiting for the whole thing.
+    bool sampleEnabled = false;
+    int sampleSize = 100;
 
     // Per-slot preview texture for the currently selected image (Batch's
     // per-image detail pane); Live's per-slot streaming texture lives on
@@ -215,6 +236,14 @@ bool batchEvalImagePassesConfidenceFilter(
 // prediction contributes 0.0f, so images missing a prediction sort first
 // ascending / last descending).
 float batchEvalImageSortConfidence(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
+
+// True if `filename` passes the current detection-presence filter for
+// either slot (OR, matching isBatchEvalImageMismatch's convention):
+// HasDetections passes if slot A or slot B found at least one box,
+// NoDetections passes if slot A or slot B found none. Always true when
+// mode != Detection or batch.detectionPresenceFilter == Any.
+bool batchEvalImagePassesDetectionPresenceFilter(
+    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
 
 enum class FilePickerTarget {
     SlotAModel,

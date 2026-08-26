@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 
 namespace {
@@ -33,6 +34,7 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
     slot.engineStatus.clear();
     slot.detectionModel.reset();
     slot.classificationModel.reset();
+    slot.anomalyModel.reset();
 
     if (slot.onnxPath.empty()) {
         return;
@@ -52,7 +54,7 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
         }
         slot.detectionModel = model;
         slot.engineStatus = model->isGpuActive() ? "Engine: GPU" : "Engine: CPU";
-    } else {
+    } else if (mode == ComparisonTaskMode::Classification) {
         std::string error;
         auto model = std::make_shared<ClassificationModel>(
             slot.onnxPath, classNames, slot.inputWidth, slot.inputHeight, slot.hints, error);
@@ -61,6 +63,17 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
             return;
         }
         slot.classificationModel = model;
+        slot.engineStatus = model->isGpuActive() ? "Engine: GPU" : "Engine: CPU";
+    } else {
+        std::string error;
+        auto model = std::make_shared<AnomalyModel>(
+            slot.onnxPath, slot.inputWidth, slot.inputHeight, slot.hints, slot.anomalyScoreMin, slot.anomalyScoreMax,
+            error);
+        if (!model->isValid()) {
+            slot.loadError = error;
+            return;
+        }
+        slot.anomalyModel = model;
         slot.engineStatus = model->isGpuActive() ? "Engine: GPU" : "Engine: CPU";
     }
 }
@@ -86,6 +99,15 @@ void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ModelEvaluationState& sta
     } else if (result.suggestedMode == DetectedTaskMode::Classification) {
         statusMessage += ", suggested: Classification";
         state.taskMode = ComparisonTaskMode::Classification;
+    } else if (result.suggestedMode == DetectedTaskMode::Anomaly) {
+        statusMessage += ", suggested: Anomaly";
+        state.taskMode = ComparisonTaskMode::Anomaly;
+    }
+    if (result.anomalyHints.present) {
+        slot.anomalyScoreMin = result.anomalyHints.minimum;
+        slot.anomalyScoreMax = result.anomalyHints.maximum;
+        slot.anomalyThreshold = result.anomalyHints.threshold;
+        statusMessage += ", anomaly score calibration found";
     }
     if (!result.classNames.empty()) {
         statusMessage += ", " + std::to_string(result.classNames.size()) + " class names found";
@@ -113,15 +135,42 @@ cv::Mat currentLiveFrame(const LiveRuntime& live, std::vector<CameraSession>& se
     return cv::Mat();
 }
 
-cv::Mat drawDetectionsOnFrame(const cv::Mat& frame, const std::vector<Detection>& detections) {
+// Box/label size scales UP with the frame's own resolution relative to an
+// 800px-wide baseline (never down -- a photo smaller than the baseline
+// still gets full-size text, since shrinking further only makes small
+// source photos worse), and every label is drawn on a solid background so
+// it stays readable regardless of what color the photo behind it is
+// (green-on-green or green-on-white was otherwise invisible no matter the
+// font size).
+cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections) {
     cv::Mat annotated = frame.clone();
+    const float scale = std::clamp(static_cast<float>(frame.cols) / 800.0f, 1.0f, 3.0f);
+    const int boxThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
+    const int textThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
+    const double fontScale = 0.85 * scale;
     for (const auto& detection : detections) {
-        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), 2);
+        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), boxThickness);
+
         const std::string label =
             detection.className + " " + std::to_string(static_cast<int>(detection.confidence * 100)) + "%";
+        int baseline = 0;
+        const cv::Size textSize =
+            cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, textThickness, &baseline);
+
+        // Prefer just above the box; drop to just inside its top edge
+        // instead if that would clip off the top of the frame.
+        const int margin = 4;
+        const int aboveTop = detection.box.y - margin - textSize.height - baseline;
+        const int top = aboveTop >= 0 ? aboveTop : detection.box.y + margin;
+        const cv::Point textOrigin(detection.box.x, top + textSize.height);
+
+        cv::rectangle(
+            annotated, cv::Point(textOrigin.x - 2, top - 2),
+            cv::Point(textOrigin.x + textSize.width + 2, top + textSize.height + baseline + 2),
+            cv::Scalar(0, 0, 0), cv::FILLED);
         cv::putText(
-            annotated, label, detection.box.tl() + cv::Point(0, -4),
-            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+            annotated, label, textOrigin, cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), textThickness,
+            cv::LINE_AA);
     }
     return annotated;
 }
@@ -157,7 +206,7 @@ void updateLiveSlot(
             liveSlot.latestDetections = std::move(result.detections);
             liveSlot.latestInferenceMs = result.inferenceMs;
             if (!frame.empty()) {
-                const cv::Mat annotated = drawDetectionsOnFrame(frame, liveSlot.latestDetections);
+                const cv::Mat annotated = annotateDetections(frame, liveSlot.latestDetections);
                 uploadFrameToTexture(liveSlot.texture, annotated, liveSlot.textureWidth, liveSlot.textureHeight);
             }
         }
@@ -213,19 +262,6 @@ void updateLiveRuntime(
 
 namespace {
 
-cv::Mat drawDetectionsOnImage(const cv::Mat& frame, const std::vector<Detection>& detections) {
-    cv::Mat annotated = frame.clone();
-    for (const auto& detection : detections) {
-        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), 2);
-        const std::string label =
-            detection.className + " " + std::to_string(static_cast<int>(detection.confidence * 100)) + "%";
-        cv::putText(
-            annotated, label, detection.box.tl() + cv::Point(0, -4),
-            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-    }
-    return annotated;
-}
-
 const BatchImageResult* findBatchImage(const BatchEvaluationResult& result, const std::string& filename) {
     for (const auto& image : result.images) {
         if (image.imageFilename == filename) {
@@ -261,7 +297,7 @@ void syncBatchEvalSelectedPreview(ComparisonTaskMode mode, const std::string& im
             glGenTextures(1, &preview.previewTexture);
         }
         const cv::Mat toUpload = (mode == ComparisonTaskMode::Detection)
-            ? drawDetectionsOnImage(frame, image->detections)
+            ? annotateDetections(frame, image->detections)
             : frame;
         uploadFrameToTexture(
             preview.previewTexture, toUpload, preview.previewTextureWidth, preview.previewTextureHeight);
@@ -302,6 +338,7 @@ void startBatchEvaluationRun(
         config.groundTruth = batch.groundTruth;
     }
     config.runSlotB = compareTwoModels;
+    config.sampleSize = batch.sampleEnabled ? batch.sampleSize : 0;
     config.detectionModelA = slots[0].detectionModel;
     config.detectionModelB = slots[1].detectionModel;
     config.classificationModelA = slots[0].classificationModel;
@@ -450,6 +487,33 @@ float batchEvalImageSortConfidence(ComparisonTaskMode mode, const BatchRuntime& 
         return *confA;
     }
     return std::min(*confA, *confB);
+}
+
+bool batchEvalImagePassesDetectionPresenceFilter(
+    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
+    if (mode != ComparisonTaskMode::Detection ||
+        batch.detectionPresenceFilter == BatchEvalDetectionPresenceFilter::Any) {
+        return true;
+    }
+    const BatchImageResult* imageA = findBatchImage(batch.resultA, filename);
+    const BatchImageResult* imageB = findBatchImage(batch.resultB, filename);
+
+    // A slot with no result for this image (single-model mode leaves slot
+    // B entirely empty) must not participate in either direction of the
+    // filter -- otherwise "no detections" trivially passes every image
+    // whenever the other slot is simply absent.
+    const auto slotPasses = [&](const BatchImageResult* image) -> std::optional<bool> {
+        if (image == nullptr) {
+            return std::nullopt;
+        }
+        const bool hasDetections = !image->detections.empty();
+        return batch.detectionPresenceFilter == BatchEvalDetectionPresenceFilter::HasDetections ? hasDetections
+                                                                                                  : !hasDetections;
+    };
+
+    const std::optional<bool> aPasses = slotPasses(imageA);
+    const std::optional<bool> bPasses = slotPasses(imageB);
+    return (aPasses.has_value() && *aPasses) || (bPasses.has_value() && *bPasses);
 }
 
 void resetModelEvaluationResults(ModelEvaluationState& state) {
