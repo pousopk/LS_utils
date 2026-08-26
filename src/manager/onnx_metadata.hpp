@@ -2,6 +2,7 @@
 
 #include "onnx-ml.pb.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -48,7 +49,31 @@ struct OnnxPreprocessingHints {
     // ratio) instead of this app's existing plain (aspect-distorting)
     // resize. Driven by a `maintain_aspect_ratio` metadata entry.
     bool maintainAspectRatio = false;
+    // Optional per-channel normalization applied after inputScale (e.g.
+    // CLIP/DINOv2-style "(x - mean) / std" per RGB channel). Defaults to
+    // a no-op (mean 0, std 1) -- existing YOLO/classification models are
+    // unaffected unless a caller explicitly sets non-default values.
+    std::array<float, 3> channelMean = {0.0f, 0.0f, 0.0f};
+    std::array<float, 3> channelStd = {1.0f, 1.0f, 1.0f};
 };
+
+// Anomaly image-level score calibration, parsed from `vad_params` (a
+// `{'minimum': ..., 'maximum': ...}`-style dict repr) and
+// `auto_threshold` metadata_props. `present` is false (all fields left
+// at these defaults) if neither prop is found/parses -- callers still
+// get a usable 0..1/0.5 default in that case.
+struct AnomalyScoreHints {
+    bool present = false;
+    float minimum = 0.0f;
+    float maximum = 1.0f;
+    float threshold = 0.5f;
+};
+
+AnomalyScoreHints extractAnomalyScoreHints(const onnx::ModelProto& model);
+
+// Best-effort read of the `task` metadata_prop (e.g. "vad"). Empty
+// string if absent.
+std::string extractTaskHint(const onnx::ModelProto& model);
 
 // Reads `pixel_normalization`, `padding`, and `maintain_aspect_ratio`
 // metadata_props entries (each optional, each independently best-effort)

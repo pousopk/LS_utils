@@ -282,3 +282,49 @@ OnnxPreprocessingHints extractPreprocessingHints(const onnx::ModelProto& model) 
 
     return hints;
 }
+
+AnomalyScoreHints extractAnomalyScoreHints(const onnx::ModelProto& model) {
+    AnomalyScoreHints hints;
+
+    std::string vadParams;
+    std::string autoThreshold;
+    for (const auto& prop : model.metadata_props()) {
+        if (prop.key() == "vad_params") {
+            vadParams = prop.value();
+        } else if (prop.key() == "auto_threshold") {
+            autoThreshold = prop.value();
+        }
+    }
+
+    if (!vadParams.empty()) {
+        const auto minimum = findRawValueAfterKey(vadParams, "minimum");
+        const auto maximum = findRawValueAfterKey(vadParams, "maximum");
+        if (minimum && maximum) {
+            const auto minVal = parseNumber(*minimum);
+            const auto maxVal = parseNumber(*maximum);
+            if (minVal && maxVal) {
+                hints.minimum = static_cast<float>(*minVal);
+                hints.maximum = static_cast<float>(*maxVal);
+                hints.present = true;
+            }
+        }
+    }
+
+    if (!autoThreshold.empty()) {
+        if (const auto v = parseNumber(autoThreshold)) {
+            hints.threshold = static_cast<float>(*v);
+            hints.present = true;
+        }
+    }
+
+    return hints;
+}
+
+std::string extractTaskHint(const onnx::ModelProto& model) {
+    for (const auto& prop : model.metadata_props()) {
+        if (prop.key() == "task") {
+            return prop.value();
+        }
+    }
+    return {};
+}
