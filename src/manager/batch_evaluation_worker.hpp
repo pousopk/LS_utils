@@ -2,7 +2,7 @@
 
 #include "manager/batch_evaluation.hpp"
 #include "manager/classification_inference.hpp"
-#include "manager/model_comparison_state.hpp"
+#include "manager/comparison_task_mode.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <atomic>
@@ -16,11 +16,12 @@ struct BatchEvalRunConfig {
     std::string imageFolderPath;
     LabelStudioImportResult groundTruth;  // ignored unless hasGroundTruth
     bool hasGroundTruth = false;
+    bool runSlotB = true;  // false = single-model run, slot B's models/thresholds are ignored
     std::shared_ptr<YoloModel> detectionModelA;
     std::shared_ptr<YoloModel> detectionModelB;
     std::shared_ptr<ClassificationModel> classificationModelA;
     std::shared_ptr<ClassificationModel> classificationModelB;
-    // Per-slot, matching ModelComparisonSlot's existing precedent (two
+    // Per-slot, matching ModelSlotConfig's existing precedent (two
     // models may legitimately want different confidence/NMS thresholds).
     float confThresholdA = 0.25f;
     float nmsThresholdA = 0.45f;

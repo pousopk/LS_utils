@@ -66,7 +66,7 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
             onProgressA, &cancelRequested_);
     }
 
-    if (!cancelRequested_.load()) {
+    if (!cancelRequested_.load() && config.runSlotB) {
         currentSlot_.store(2);
         completed_.store(0);
         total_.store(0);
