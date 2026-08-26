@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <random>
 
 namespace {
 
@@ -48,6 +49,18 @@ const ImageGroundTruth* findGroundTruth(const LabelStudioImportResult* groundTru
 
 } // namespace
 
+std::vector<std::filesystem::path> sampleImageFiles(
+    std::vector<std::filesystem::path> files, int sampleSize, unsigned seed) {
+    if (sampleSize <= 0 || sampleSize >= static_cast<int>(files.size())) {
+        return files;
+    }
+    std::mt19937 rng(seed);
+    std::shuffle(files.begin(), files.end(), rng);
+    files.resize(static_cast<size_t>(sampleSize));
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
 TimingStats computeTimingStats(std::vector<double> inferenceMsSamples) {
     TimingStats stats;
     stats.count = static_cast<int>(inferenceMsSamples.size());
@@ -82,14 +95,18 @@ BatchEvaluationResult runDetectionBatchEvaluation(
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested) {
+    const std::atomic<bool>* cancelRequested,
+    int sampleSize,
+    unsigned sampleSeed) {
     BatchEvaluationResult result;
 
-    const auto files = listImageFiles(imageFolderPath);
+    auto files = listImageFiles(imageFolderPath);
     if (files.empty()) {
         result.error = "No recognized image files found in: " + imageFolderPath;
         return result;
     }
+    result.totalFilesInFolder = static_cast<int>(files.size());
+    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
 
     const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
@@ -112,7 +129,8 @@ BatchEvaluationResult runDetectionBatchEvaluation(
             std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename)) {
+        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename);
+            gt != nullptr && gt->hasDetectionAnnotation) {
             imageResult.groundTruthBoxes = gt->boxes;
             imageResult.hasGroundTruth = true;
             result.imagesWithGroundTruth++;
@@ -133,14 +151,18 @@ BatchEvaluationResult runClassificationBatchEvaluation(
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested) {
+    const std::atomic<bool>* cancelRequested,
+    int sampleSize,
+    unsigned sampleSeed) {
     BatchEvaluationResult result;
 
-    const auto files = listImageFiles(imageFolderPath);
+    auto files = listImageFiles(imageFolderPath);
     if (files.empty()) {
         result.error = "No recognized image files found in: " + imageFolderPath;
         return result;
     }
+    result.totalFilesInFolder = static_cast<int>(files.size());
+    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
 
     const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
@@ -163,11 +185,68 @@ BatchEvaluationResult runClassificationBatchEvaluation(
             std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename)) {
+        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename);
+            gt != nullptr && gt->hasClassificationAnnotation) {
             imageResult.groundTruthLabel = gt->classificationLabel;
             imageResult.hasGroundTruth = true;
             result.imagesWithGroundTruth++;
         }
+
+        result.images.push_back(std::move(imageResult));
+        if (onProgress) {
+            onProgress(result.imagesFound, totalFiles);
+        }
+    }
+
+    result.timing = computeTimingStats(timings);
+    return result;
+}
+
+BatchEvaluationResult runAnomalyBatchEvaluation(
+    const std::string& imageFolderPath,
+    const LabelStudioImportResult* groundTruth,
+    const std::function<AnomalyResult(const cv::Mat&)>& infer,
+    const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested,
+    int sampleSize,
+    unsigned sampleSeed) {
+    (void)groundTruth;  // Anomaly mode has no ground truth ingestion yet (sub-projects 2/3).
+    BatchEvaluationResult result;
+
+    auto files = listImageFiles(imageFolderPath);
+    if (files.empty()) {
+        result.error = "No recognized image files found in: " + imageFolderPath;
+        return result;
+    }
+    result.totalFilesInFolder = static_cast<int>(files.size());
+    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
+
+    const int totalFiles = static_cast<int>(files.size());
+    std::vector<double> timings;
+    for (const auto& path : files) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            break;
+        }
+        const cv::Mat frame = cv::imread(path.string());
+        if (frame.empty()) {
+            continue;
+        }
+        result.imagesFound++;
+
+        BatchImageResult imageResult;
+        imageResult.imageFilename = path.filename().string();
+
+        const auto startedAt = std::chrono::steady_clock::now();
+        const AnomalyResult anomaly = infer(frame);
+        imageResult.inferenceMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count();
+        timings.push_back(imageResult.inferenceMs);
+
+        BatchAnomalyResult scalarResult;
+        scalarResult.rawScore = anomaly.rawScore;
+        scalarResult.score = anomaly.score;
+        scalarResult.isAnomalous = anomaly.isAnomalous;
+        imageResult.anomalyResult = scalarResult;
 
         result.images.push_back(std::move(imageResult));
         if (onProgress) {

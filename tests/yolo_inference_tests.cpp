@@ -1249,6 +1249,90 @@ void test_runClassificationBatchEvaluation_cancellation() {
     fs::remove_all(tempDir, ec);
 }
 
+void test_runAnomalyBatchEvaluation_storesOnlyScalarFields() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_anomaly_batch_scalar";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+
+    const auto result = runAnomalyBatchEvaluation(tempDir.string(), nullptr, [](const cv::Mat&) {
+        AnomalyResult anomaly;
+        anomaly.heatmap = cv::Mat(4, 4, CV_32F, cv::Scalar(0.9f));  // must NOT survive into the stored result
+        anomaly.rawScore = 0.9f;
+        anomaly.score = 0.9f;
+        anomaly.isAnomalous = true;
+        return anomaly;
+    });
+
+    CHECK(result.error.empty());
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].anomalyResult.has_value());
+    CHECK(approxEqual(result.images[0].anomalyResult->rawScore, 0.9f));
+    CHECK(approxEqual(result.images[0].anomalyResult->score, 0.9f));
+    CHECK(result.images[0].anomalyResult->isAnomalous == true);
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runAnomalyBatchEvaluation_emptyFolderIsError() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_anomaly_batch_empty";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    const auto result = runAnomalyBatchEvaluation(tempDir.string(), nullptr, [](const cv::Mat&) { return AnomalyResult{}; });
+
+    CHECK(!result.error.empty());
+    CHECK(result.images.empty());
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runAnomalyBatchEvaluation_progressCallback() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_anomaly_batch_progress";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+    cv::imwrite((tempDir / "b.jpg").string(), img);
+
+    std::vector<std::pair<int, int>> progressCalls;
+    const auto result = runAnomalyBatchEvaluation(
+        tempDir.string(), nullptr, [](const cv::Mat&) { return AnomalyResult{}; },
+        [&](int completed, int total) { progressCalls.push_back({completed, total}); });
+
+    CHECK(result.error.empty());
+    CHECK(progressCalls.size() == 2);
+    CHECK(progressCalls[0] == std::make_pair(1, 2));
+    CHECK(progressCalls[1] == std::make_pair(2, 2));
+
+    fs::remove_all(tempDir, ec);
+}
+
+void test_runAnomalyBatchEvaluation_cancellation() {
+    namespace fs = std::filesystem;
+    const fs::path tempDir = fs::temp_directory_path() / "vision_app_test_anomaly_batch_cancel";
+    std::error_code ec;
+    fs::create_directories(tempDir, ec);
+
+    cv::Mat img(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::imwrite((tempDir / "a.jpg").string(), img);
+
+    std::atomic<bool> cancelRequested{true};
+    const auto result = runAnomalyBatchEvaluation(
+        tempDir.string(), nullptr, [](const cv::Mat&) { return AnomalyResult{}; }, nullptr, &cancelRequested);
+
+    CHECK(result.error.empty());
+    CHECK(result.images.empty());
+
+    fs::remove_all(tempDir, ec);
+}
+
 } // namespace
 
 int main() {
@@ -1333,6 +1417,10 @@ int main() {
     test_scoreAnomalyHeatmap_nonTrivialRangeAndClamping();
     test_scoreAnomalyHeatmap_degenerateRangeClampsRawScoreDirectly();
     test_scoreAnomalyHeatmap_emptyHeatmapReturnsDefault();
+    test_runAnomalyBatchEvaluation_storesOnlyScalarFields();
+    test_runAnomalyBatchEvaluation_emptyFolderIsError();
+    test_runAnomalyBatchEvaluation_progressCallback();
+    test_runAnomalyBatchEvaluation_cancellation();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
