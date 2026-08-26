@@ -282,12 +282,18 @@ void drawRunBar(ModelEvaluationState& state) {
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Run cancelled.");
     }
 
-    const bool slotALoaded = (state.taskMode == ComparisonTaskMode::Detection)
-        ? (state.slots[0].detectionModel != nullptr)
-        : (state.slots[0].classificationModel != nullptr);
-    const bool slotBLoaded = (state.taskMode == ComparisonTaskMode::Detection)
-        ? (state.slots[1].detectionModel != nullptr)
-        : (state.slots[1].classificationModel != nullptr);
+    const auto slotLoaded = [&state](int index) {
+        const ModelSlotConfig& slot = state.slots[static_cast<size_t>(index)];
+        if (state.taskMode == ComparisonTaskMode::Detection) {
+            return slot.detectionModel != nullptr;
+        }
+        if (state.taskMode == ComparisonTaskMode::Classification) {
+            return slot.classificationModel != nullptr;
+        }
+        return slot.anomalyModel != nullptr;
+    };
+    const bool slotALoaded = slotLoaded(0);
+    const bool slotBLoaded = slotLoaded(1);
     const bool modelsLoaded = slotALoaded && (!state.compareTwoModels || slotBLoaded);
     const bool canRun = modelsLoaded && !state.batch.imageFolderPath.empty();
 
@@ -449,6 +455,16 @@ void drawMetricRowSingle(const char* label, float value) {
     ImGui::Text("%.4f", value);
 }
 
+int countAnomalousImages(const BatchEvaluationResult& result) {
+    int count = 0;
+    for (const auto& image : result.images) {
+        if (image.anomalyResult && image.anomalyResult->isAnomalous) {
+            count++;
+        }
+    }
+    return count;
+}
+
 void drawAggregateMetricsSingle(ModelEvaluationState& state) {
     if (!ImGui::BeginTable("BatchEvalMetrics", 2, ImGuiTableFlags_Borders)) {
         return;
@@ -457,7 +473,15 @@ void drawAggregateMetricsSingle(ModelEvaluationState& state) {
     ImGui::TableSetupColumn("Model");
     ImGui::TableHeadersRow();
 
-    if (state.batch.hasGroundTruth) {
+    if (state.taskMode == ComparisonTaskMode::Anomaly) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Flagged anomalous");
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%d / %d", countAnomalousImages(state.batch.resultA),
+            static_cast<int>(state.batch.resultA.images.size()));
+    } else if (state.batch.hasGroundTruth) {
         if (state.taskMode == ComparisonTaskMode::Detection) {
             drawMetricRowSingle("mAP@0.5", state.batch.detectionMetricsA.meanAveragePrecision);
         } else {
@@ -498,7 +522,19 @@ void drawAggregateMetrics(ModelEvaluationState& state) {
     ImGui::TableSetupColumn("Model B");
     ImGui::TableHeadersRow();
 
-    if (state.batch.hasGroundTruth) {
+    if (state.taskMode == ComparisonTaskMode::Anomaly) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Flagged anomalous");
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%d / %d", countAnomalousImages(state.batch.resultA),
+            static_cast<int>(state.batch.resultA.images.size()));
+        ImGui::TableNextColumn();
+        ImGui::Text(
+            "%d / %d", countAnomalousImages(state.batch.resultB),
+            static_cast<int>(state.batch.resultB.images.size()));
+    } else if (state.batch.hasGroundTruth) {
         if (state.taskMode == ComparisonTaskMode::Detection) {
             drawMetricRow(
                 "mAP@0.5", state.batch.detectionMetricsA.meanAveragePrecision,
@@ -671,6 +707,15 @@ void drawSlotPredictionText(ComparisonTaskMode mode, const BatchImageResult* ima
                 correct ? kGoodColor : kBadColor, "Top-1: %s (%.1f%%)", top1.className.c_str(),
                 top1.probability * 100.0f);
         }
+    } else if (mode == ComparisonTaskMode::Anomaly) {
+        if (!image->anomalyResult) {
+            ImGui::TextDisabled("No result.");
+            return;
+        }
+        const bool anomalous = image->anomalyResult->isAnomalous;
+        ImGui::TextColored(
+            anomalous ? kBadColor : kGoodColor, "Score: %.2f (%s)", image->anomalyResult->score,
+            anomalous ? "ANOMALOUS" : "normal");
     } else {
         if (image->detections.empty()) {
             ImGui::TextDisabled("No detections.");
