@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/anomaly_inference.hpp"
 #include "manager/batch_evaluation.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/comparison_task_mode.hpp"
@@ -17,16 +18,24 @@ struct BatchEvalRunConfig {
     LabelStudioImportResult groundTruth;  // ignored unless hasGroundTruth
     bool hasGroundTruth = false;
     bool runSlotB = true;  // false = single-model run, slot B's models/thresholds are ignored
+    int sampleSize = 0;    // 0 = evaluate every image; otherwise a random subset of this size,
+                            // seeded once per run so both slots see the exact same subset
     std::shared_ptr<YoloModel> detectionModelA;
     std::shared_ptr<YoloModel> detectionModelB;
     std::shared_ptr<ClassificationModel> classificationModelA;
     std::shared_ptr<ClassificationModel> classificationModelB;
+    std::shared_ptr<AnomalyModel> anomalyModelA;
+    std::shared_ptr<AnomalyModel> anomalyModelB;
     // Per-slot, matching ModelSlotConfig's existing precedent (two
     // models may legitimately want different confidence/NMS thresholds).
     float confThresholdA = 0.25f;
     float nmsThresholdA = 0.45f;
     float confThresholdB = 0.25f;
     float nmsThresholdB = 0.45f;
+    // Anomaly mode only -- see AnomalyModel::infer (threshold is a
+    // call-time parameter, not baked into the model).
+    float anomalyThresholdA = 0.5f;
+    float anomalyThresholdB = 0.5f;
 };
 
 struct BatchEvalProgress {

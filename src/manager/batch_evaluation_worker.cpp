@@ -1,5 +1,7 @@
 #include "manager/batch_evaluation_worker.hpp"
 
+#include <random>
+
 BatchEvaluationWorker::~BatchEvaluationWorker() {
     requestCancel();
     if (thread_.joinable()) {
@@ -43,6 +45,10 @@ bool BatchEvaluationWorker::tryTakeResult(BatchEvalRunResult& out) {
 
 void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
     const LabelStudioImportResult* groundTruth = config.hasGroundTruth ? &config.groundTruth : nullptr;
+    // Drawn once per run and reused for both slots -- if sampling is on, A
+    // and B must be evaluated against the identical random subset or their
+    // results aren't comparable.
+    const unsigned sampleSeed = std::random_device{}();
     BatchEvalRunResult result;
 
     currentSlot_.store(1);
@@ -58,12 +64,17 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
             [&](const cv::Mat& frame) {
                 return config.detectionModelA->infer(frame, config.confThresholdA, config.nmsThresholdA);
             },
-            onProgressA, &cancelRequested_);
-    } else {
+            onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
+    } else if (config.mode == ComparisonTaskMode::Classification) {
         result.slotA = runClassificationBatchEvaluation(
             config.imageFolderPath, groundTruth,
             [&](const cv::Mat& frame) { return config.classificationModelA->infer(frame); },
-            onProgressA, &cancelRequested_);
+            onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
+    } else {
+        result.slotA = runAnomalyBatchEvaluation(
+            config.imageFolderPath, groundTruth,
+            [&](const cv::Mat& frame) { return config.anomalyModelA->infer(frame, config.anomalyThresholdA); },
+            onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
     }
 
     if (!cancelRequested_.load() && config.runSlotB) {
@@ -80,12 +91,17 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
                 [&](const cv::Mat& frame) {
                     return config.detectionModelB->infer(frame, config.confThresholdB, config.nmsThresholdB);
                 },
-                onProgressB, &cancelRequested_);
-        } else {
+                onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);
+        } else if (config.mode == ComparisonTaskMode::Classification) {
             result.slotB = runClassificationBatchEvaluation(
                 config.imageFolderPath, groundTruth,
                 [&](const cv::Mat& frame) { return config.classificationModelB->infer(frame); },
-                onProgressB, &cancelRequested_);
+                onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);
+        } else {
+            result.slotB = runAnomalyBatchEvaluation(
+                config.imageFolderPath, groundTruth,
+                [&](const cv::Mat& frame) { return config.anomalyModelB->infer(frame, config.anomalyThresholdB); },
+                onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);
         }
     }
 
