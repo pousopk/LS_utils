@@ -160,6 +160,10 @@ void drawLiveSlotCanvas(const ModelEvaluationState& state, int slotIndex) {
         ImGui::Text(
             "%s -- %.1f ms, %d detections, avg conf %.2f", label, liveSlot.latestInferenceMs,
             static_cast<int>(liveSlot.latestDetections.size()), averageConfidence);
+    } else if (state.taskMode == ComparisonTaskMode::Anomaly) {
+        ImGui::Text(
+            "%s -- %.1f ms, score %.2f (%s)", label, liveSlot.latestInferenceMs, liveSlot.latestAnomalyResult.score,
+            liveSlot.latestAnomalyResult.isAnomalous ? "ANOMALOUS" : "normal");
     } else {
         ImGui::Text("%s -- %.1f ms", label, liveSlot.latestInferenceMs);
     }
