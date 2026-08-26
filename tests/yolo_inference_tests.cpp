@@ -1,3 +1,4 @@
+#include "manager/anomaly_inference.hpp"
 #include "manager/batch_evaluation.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/classification_metrics.hpp"
@@ -208,6 +209,49 @@ void test_decodeClassificationOutput_rejectsWrongShape() {
         threw = true;
     }
     CHECK(threw);
+}
+
+void test_scoreAnomalyHeatmap_maxReductionAndNormalization() {
+    cv::Mat heatmap(4, 4, CV_32F, cv::Scalar(0.2f));
+    heatmap.at<float>(2, 2) = 0.8f;
+
+    const AnomalyScore result = scoreAnomalyHeatmap(heatmap, /*scoreMin=*/0.0f, /*scoreMax=*/1.0f, /*threshold=*/0.5f);
+    CHECK(approxEqual(result.rawScore, 0.8f));
+    CHECK(approxEqual(result.score, 0.8f));
+    CHECK(result.isAnomalous == true);
+}
+
+void test_scoreAnomalyHeatmap_belowThresholdIsNotAnomalous() {
+    cv::Mat heatmap(4, 4, CV_32F, cv::Scalar(0.3f));
+    const AnomalyScore result = scoreAnomalyHeatmap(heatmap, 0.0f, 1.0f, 0.5f);
+    CHECK(approxEqual(result.score, 0.3f));
+    CHECK(result.isAnomalous == false);
+}
+
+void test_scoreAnomalyHeatmap_nonTrivialRangeAndClamping() {
+    cv::Mat heatmap(2, 2, CV_32F, cv::Scalar(0.5f));
+    // (0.5 - 0.2) / (0.6 - 0.2) = 0.75
+    const AnomalyScore result = scoreAnomalyHeatmap(heatmap, 0.2f, 0.6f, 0.5f);
+    CHECK(approxEqual(result.score, 0.75f));
+
+    cv::Mat aboveMax(2, 2, CV_32F, cv::Scalar(10.0f));
+    CHECK(approxEqual(scoreAnomalyHeatmap(aboveMax, 0.0f, 1.0f, 0.5f).score, 1.0f));
+
+    cv::Mat belowMin(2, 2, CV_32F, cv::Scalar(-10.0f));
+    CHECK(approxEqual(scoreAnomalyHeatmap(belowMin, 0.0f, 1.0f, 0.5f).score, 0.0f));
+}
+
+void test_scoreAnomalyHeatmap_degenerateRangeClampsRawScoreDirectly() {
+    cv::Mat heatmap(2, 2, CV_32F, cv::Scalar(0.7f));
+    const AnomalyScore result = scoreAnomalyHeatmap(heatmap, /*scoreMin=*/1.0f, /*scoreMax=*/1.0f, 0.5f);
+    CHECK(approxEqual(result.score, 0.7f));
+}
+
+void test_scoreAnomalyHeatmap_emptyHeatmapReturnsDefault() {
+    const AnomalyScore result = scoreAnomalyHeatmap(cv::Mat(), 0.0f, 1.0f, 0.5f);
+    CHECK(approxEqual(result.rawScore, 0.0f));
+    CHECK(approxEqual(result.score, 0.0f));
+    CHECK(result.isAnomalous == false);
 }
 
 void test_extractInputShape_valid() {
@@ -1284,6 +1328,11 @@ int main() {
     test_unletterboxMask_centeredPadding_cropsAndResizesBack();
     test_unletterboxMask_topLeftPadding_cropsFromOrigin();
     test_unletterboxMask_resizesBackToOriginalDimensions();
+    test_scoreAnomalyHeatmap_maxReductionAndNormalization();
+    test_scoreAnomalyHeatmap_belowThresholdIsNotAnomalous();
+    test_scoreAnomalyHeatmap_nonTrivialRangeAndClamping();
+    test_scoreAnomalyHeatmap_degenerateRangeClampsRawScoreDirectly();
+    test_scoreAnomalyHeatmap_emptyHeatmapReturnsDefault();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
