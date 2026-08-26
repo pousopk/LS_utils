@@ -9,6 +9,7 @@ enum class DetectedTaskMode {
     Unknown,
     Detection,
     Classification,
+    Anomaly,
 };
 
 struct ModelAutoDetectResult {
@@ -18,6 +19,7 @@ struct ModelAutoDetectResult {
     DetectedTaskMode suggestedMode = DetectedTaskMode::Unknown;
     std::vector<std::string> classNames;
     OnnxPreprocessingHints hints;
+    AnomalyScoreHints anomalyHints;  // only meaningful when suggestedMode == Anomaly
     std::string error;
 };
 

@@ -25,6 +25,12 @@ ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
     result.inputHeight = shape.height;
     result.classNames = extractClassNames(model);
     result.hints = extractPreprocessingHints(model);
+    result.anomalyHints = extractAnomalyScoreHints(model);
+
+    if (extractTaskHint(model) == "vad") {
+        result.suggestedMode = DetectedTaskMode::Anomaly;
+        return result;
+    }
 
     OrtSessionResult session = createOrtSession(onnxPath);
     if (!session.session) {
@@ -56,6 +62,10 @@ ModelAutoDetectResult autoDetectModel(const std::string& onnxPath) {
             result.suggestedMode = DetectedTaskMode::Detection;
         } else if (output.dims == 2 && output.size[0] == 1) {
             result.suggestedMode = DetectedTaskMode::Classification;
+        } else if (
+            output.dims == 4 && output.size[0] == 1 && output.size[1] == 1 && output.size[2] == shape.height &&
+            output.size[3] == shape.width) {
+            result.suggestedMode = DetectedTaskMode::Anomaly;
         }
     } catch (const Ort::Exception&) {
         // Mode guess failed -- leave suggestedMode at Unknown. Shape and

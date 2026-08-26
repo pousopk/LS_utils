@@ -6,4 +6,5 @@
 enum class ComparisonTaskMode {
     Detection,
     Classification,
+    Anomaly,
 };
