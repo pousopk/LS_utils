@@ -337,7 +337,9 @@ const BatchImageResult* findBatchImage(const BatchEvaluationResult& result, cons
     return nullptr;
 }
 
-void syncBatchEvalSelectedPreview(ComparisonTaskMode mode, const std::string& imageFolderPath, BatchRuntime& batch) {
+void syncBatchEvalSelectedPreview(
+    ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
+    BatchRuntime& batch) {
     if (batch.selectedImageFilename == batch.renderedPreviewFilename) {
         return;
     }
@@ -362,9 +364,14 @@ void syncBatchEvalSelectedPreview(ComparisonTaskMode mode, const std::string& im
         if (preview.previewTexture == 0) {
             glGenTextures(1, &preview.previewTexture);
         }
-        const cv::Mat toUpload = (mode == ComparisonTaskMode::Detection)
-            ? annotateDetections(frame, image->detections)
-            : frame;
+        const ModelSlotConfig& slot = slots[static_cast<size_t>(i)];
+        cv::Mat toUpload = frame;
+        if (mode == ComparisonTaskMode::Detection) {
+            toUpload = annotateDetections(frame, image->detections);
+        } else if (mode == ComparisonTaskMode::Anomaly && slot.anomalyModel) {
+            const AnomalyResult anomaly = slot.anomalyModel->infer(frame, slot.anomalyThreshold);
+            toUpload = annotateAnomalyHeatmap(frame, anomaly);
+        }
         uploadFrameToTexture(
             preview.previewTexture, toUpload, preview.previewTextureWidth, preview.previewTextureHeight);
     }
@@ -409,6 +416,10 @@ void startBatchEvaluationRun(
     config.detectionModelB = slots[1].detectionModel;
     config.classificationModelA = slots[0].classificationModel;
     config.classificationModelB = slots[1].classificationModel;
+    config.anomalyModelA = slots[0].anomalyModel;
+    config.anomalyModelB = slots[1].anomalyModel;
+    config.anomalyThresholdA = slots[0].anomalyThreshold;
+    config.anomalyThresholdB = slots[1].anomalyThreshold;
     config.confThresholdA = slots[0].confThreshold;
     config.nmsThresholdA = slots[0].nmsThreshold;
     config.confThresholdB = slots[1].confThreshold;
@@ -426,7 +437,9 @@ void startBatchEvaluationRun(
     batch.runState = BatchEvalRunState::Running;
 }
 
-void updateBatchRuntime(ComparisonTaskMode mode, const std::string& imageFolderPath, BatchRuntime& batch) {
+void updateBatchRuntime(
+    ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
+    BatchRuntime& batch) {
     if (batch.runState == BatchEvalRunState::Running) {
         batch.lastProgress = batch.worker.progress();
 
@@ -440,18 +453,19 @@ void updateBatchRuntime(ComparisonTaskMode mode, const std::string& imageFolderP
                 if (mode == ComparisonTaskMode::Detection) {
                     batch.detectionMetricsA = computeDetectionMetrics(toDetectionEvaluationItems(batch.resultA));
                     batch.detectionMetricsB = computeDetectionMetrics(toDetectionEvaluationItems(batch.resultB));
-                } else {
+                } else if (mode == ComparisonTaskMode::Classification) {
                     batch.classificationMetricsA =
                         computeClassificationMetrics(toClassificationEvaluationItems(batch.resultA));
                     batch.classificationMetricsB =
                         computeClassificationMetrics(toClassificationEvaluationItems(batch.resultB));
                 }
+                // Anomaly mode: no metrics this sub-project (no ground truth yet).
                 batch.runState = BatchEvalRunState::Complete;
             }
         }
     }
 
-    syncBatchEvalSelectedPreview(mode, imageFolderPath, batch);
+    syncBatchEvalSelectedPreview(mode, slots, imageFolderPath, batch);
 }
 
 bool isBatchEvalImageMismatch(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
@@ -514,6 +528,12 @@ std::optional<float> batchEvalImageConfidence(
             return std::nullopt;
         }
         return image->predictions.front().probability;
+    }
+    if (mode == ComparisonTaskMode::Anomaly) {
+        if (!image->anomalyResult) {
+            return std::nullopt;
+        }
+        return image->anomalyResult->score;
     }
     if (image->detections.empty()) {
         return std::nullopt;

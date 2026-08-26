@@ -215,7 +215,9 @@ void startBatchEvaluationRun(
 // completion, computes detection/classification metrics for both slots.
 // Always also lazily loads/annotates/uploads the currently selected
 // image's preview textures (a no-op if the selection hasn't changed).
-void updateBatchRuntime(ComparisonTaskMode mode, const std::string& imageFolderPath, BatchRuntime& batch);
+void updateBatchRuntime(
+    ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
+    BatchRuntime& batch);
 
 // True if the given filename is a "mismatch" for either slot: predicted
 // top-1 != true label (classification), or the image has an unmatched
