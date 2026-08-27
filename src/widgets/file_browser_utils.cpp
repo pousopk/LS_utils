@@ -1,10 +1,24 @@
 #include "widgets/file_browser_utils.hpp"
 
 #include <imgui.h>
+#include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <system_error>
+
+namespace {
+
+std::string toLowerCopy(std::string_view text) {
+    std::string lower(text.begin(), text.end());
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower;
+}
+
+} // namespace
 
 std::filesystem::path defaultFileSelectorRoot() {
     namespace fs = std::filesystem;
@@ -82,7 +96,17 @@ std::vector<std::filesystem::path> listFiles(const std::filesystem::path& direct
     return files;
 }
 
-bool drawDirectoryBrowser(std::string& explorerDirectory, std::string* selectedDirectory, const char* listChildId) {
+bool fileNameMatchesFilter(const std::filesystem::path& file, std::string_view filterText) {
+    if (filterText.empty()) {
+        return true;
+    }
+    const std::string name = toLowerCopy(file.filename().string());
+    return name.find(toLowerCopy(filterText)) != std::string::npos;
+}
+
+bool drawDirectoryBrowser(
+    std::string& explorerDirectory, std::string* selectedDirectory, const char* listChildId,
+    std::string& filterText) {
     namespace fs = std::filesystem;
     fs::path explorerPath = normalizeDirectoryOrDefault(fs::path(explorerDirectory));
     explorerDirectory = explorerPath.string();
@@ -104,16 +128,25 @@ bool drawDirectoryBrowser(std::string& explorerDirectory, std::string* selectedD
         }
     }
 
+    ImGui::PushID(listChildId);
+    ImGui::InputTextWithHint("Filter", "Search folders...", &filterText);
+    ImGui::PopID();
+
     if (ImGui::BeginChild(listChildId, ImVec2(0, 200.0f), true)) {
         const auto dirs = listDirectories(explorerPath);
-        if (dirs.empty()) {
-            ImGui::TextDisabled("No subdirectories found.");
-        }
+        bool anyShown = false;
         for (const auto& dir : dirs) {
+            if (!fileNameMatchesFilter(dir, filterText)) {
+                continue;
+            }
+            anyShown = true;
             const std::string name = dir.filename().string();
             if (ImGui::Selectable(name.c_str(), false)) {
                 explorerDirectory = dir.string();
             }
+        }
+        if (!anyShown) {
+            ImGui::TextDisabled(dirs.empty() ? "No subdirectories found." : "No subdirectories match filter.");
         }
     }
     ImGui::EndChild();
