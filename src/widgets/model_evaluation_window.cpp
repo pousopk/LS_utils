@@ -222,7 +222,31 @@ void drawLiveBody(ModelEvaluationState& state, std::vector<CameraSession>& sessi
 
 // ---- Batch body ----
 
-void drawFolderAndGroundTruthPickers(ModelEvaluationState& state) {
+void drawBatchSourceModeToggle(BatchRuntime& batch) {
+    auto switchTo = [&batch](BatchEvalSourceMode mode) {
+        if (batch.sourceMode == mode) {
+            return;
+        }
+        batch.sourceMode = mode;
+        batch.runState = BatchEvalRunState::NotStarted;
+        batch.resultA = BatchEvaluationResult{};
+        batch.resultB = BatchEvaluationResult{};
+        batch.selectedImageFilename.reset();
+        batch.imageFolderPath.clear();
+    };
+
+    ImGui::TextUnformatted("Source");
+    if (ImGui::RadioButton("Local Folder##BatchSource", batch.sourceMode == BatchEvalSourceMode::LocalFolder)) {
+        switchTo(BatchEvalSourceMode::LocalFolder);
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton(
+            "Label Studio Project##BatchSource", batch.sourceMode == BatchEvalSourceMode::LabelStudioProject)) {
+        switchTo(BatchEvalSourceMode::LabelStudioProject);
+    }
+}
+
+void drawLocalFolderAndGroundTruthPickers(ModelEvaluationState& state) {
     ImGui::TextWrapped(
         "Image Folder: %s", state.batch.imageFolderPath.empty() ? "(none)" : state.batch.imageFolderPath.c_str());
     if (ImGui::Button("Browse Folder...")) {
@@ -245,17 +269,32 @@ void drawFolderAndGroundTruthPickers(ModelEvaluationState& state) {
     if (!state.batch.groundTruthStatus.empty()) {
         ImGui::TextDisabled("%s", state.batch.groundTruthStatus.c_str());
     }
+}
 
-    ImGui::Checkbox("Randomly sample", &state.batch.sampleEnabled);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!state.batch.sampleEnabled);
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::InputInt("images##SampleSize", &state.batch.sampleSize);
-    ImGui::EndDisabled();
-    if (state.batch.sampleSize < 1) {
-        state.batch.sampleSize = 1;
+// Downloads both images and ground truth from an existing Label Studio
+// project -- see fetchAndDownloadLabeledDataset. No from_name/to_name
+// fields here (unlike Label Assistant's push): this flow only ever reads
+// from Label Studio, never writes back to it.
+void drawBatchLabelStudioConnectionFields(BatchRuntime& batch) {
+    ImGui::InputText("Label Studio URL##Batch", &batch.labelStudioBaseUrl);
+    ImGui::InputInt("Project ID##Batch", &batch.labelStudioProjectId);
+    ImGui::InputText("API Token##Batch", &batch.labelStudioApiToken, ImGuiInputTextFlags_Password);
+    if (!batch.labelStudioAutoFetchStatus.empty()) {
+        ImGui::TextDisabled("%s", batch.labelStudioAutoFetchStatus.c_str());
     }
-    if (state.batch.sampleEnabled) {
+}
+
+void drawSampleCheckbox(BatchRuntime& batch) {
+    ImGui::Checkbox("Randomly sample", &batch.sampleEnabled);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!batch.sampleEnabled);
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::InputInt("images##SampleSize", &batch.sampleSize);
+    ImGui::EndDisabled();
+    if (batch.sampleSize < 1) {
+        batch.sampleSize = 1;
+    }
+    if (batch.sampleEnabled) {
         ImGui::TextDisabled(
             "Evaluates a random subset instead of the whole folder -- useful for a quick check on a huge "
             "dataset.");
@@ -265,8 +304,11 @@ void drawFolderAndGroundTruthPickers(ModelEvaluationState& state) {
 void drawRunBar(ModelEvaluationState& state) {
     ImGui::Separator();
     if (state.batch.runState == BatchEvalRunState::Running) {
-        const char* label = state.batch.lastProgress.currentSlot == 2 ? "Model B" : "Model A";
-        ImGui::Text("%s: %d / %d", label, state.batch.lastProgress.completed, state.batch.lastProgress.total);
+        const std::string label = !state.batch.lastProgress.phaseLabel.empty()
+            ? state.batch.lastProgress.phaseLabel
+            : (state.batch.lastProgress.currentSlot == 2 ? "Model B" : "Model A");
+        ImGui::Text(
+            "%s: %d / %d", label.c_str(), state.batch.lastProgress.completed, state.batch.lastProgress.total);
         const float fraction = state.batch.lastProgress.total > 0
             ? static_cast<float>(state.batch.lastProgress.completed) /
                 static_cast<float>(state.batch.lastProgress.total)
@@ -295,7 +337,11 @@ void drawRunBar(ModelEvaluationState& state) {
     const bool slotALoaded = slotLoaded(0);
     const bool slotBLoaded = slotLoaded(1);
     const bool modelsLoaded = slotALoaded && (!state.compareTwoModels || slotBLoaded);
-    const bool canRun = modelsLoaded && !state.batch.imageFolderPath.empty();
+    const bool sourceReady = state.batch.sourceMode == BatchEvalSourceMode::LocalFolder
+        ? !state.batch.imageFolderPath.empty()
+        : !state.batch.labelStudioBaseUrl.empty() && state.batch.labelStudioProjectId > 0
+            && !state.batch.labelStudioApiToken.empty();
+    const bool canRun = modelsLoaded && sourceReady;
 
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
@@ -303,9 +349,12 @@ void drawRunBar(ModelEvaluationState& state) {
     }
     ImGui::EndDisabled();
     if (!canRun) {
-        ImGui::TextDisabled(
-            state.compareTwoModels ? "Load both models and pick an image folder to run."
-                                    : "Load the model and pick an image folder to run.");
+        const char* modelsHint =
+            state.compareTwoModels ? "Load both models and " : "Load the model and ";
+        const char* sourceHint = state.batch.sourceMode == BatchEvalSourceMode::LocalFolder
+            ? "pick an image folder to run."
+            : "fill in the Label Studio connection to run.";
+        ImGui::TextDisabled("%s%s", modelsHint, sourceHint);
     }
 }
 
@@ -784,7 +833,13 @@ void drawSelectedImageDetail(ModelEvaluationState& state) {
 }
 
 void drawBatchBody(ModelEvaluationState& state) {
-    drawFolderAndGroundTruthPickers(state);
+    drawBatchSourceModeToggle(state.batch);
+    if (state.batch.sourceMode == BatchEvalSourceMode::LocalFolder) {
+        drawLocalFolderAndGroundTruthPickers(state);
+    } else {
+        drawBatchLabelStudioConnectionFields(state.batch);
+    }
+    drawSampleCheckbox(state.batch);
     ImGui::Separator();
 
     drawRunBar(state);
@@ -863,14 +918,14 @@ void drawFilePickerPopup(ModelEvaluationState& state) {
             switch (state.filePickerTarget) {
                 case FilePickerTarget::SlotAModel:
                     state.slots[0].onnxPath = state.filePickerSelectedFile;
-                    applyAutoDetectToModelSlot(state.slots[0], state);
+                    applyAutoDetectToModelSlot(state.slots[0], state.taskMode);
                     break;
                 case FilePickerTarget::SlotAClassNames:
                     state.slots[0].classNamesPath = state.filePickerSelectedFile;
                     break;
                 case FilePickerTarget::SlotBModel:
                     state.slots[1].onnxPath = state.filePickerSelectedFile;
-                    applyAutoDetectToModelSlot(state.slots[1], state);
+                    applyAutoDetectToModelSlot(state.slots[1], state.taskMode);
                     break;
                 case FilePickerTarget::SlotBClassNames:
                     state.slots[1].classNamesPath = state.filePickerSelectedFile;

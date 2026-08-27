@@ -74,6 +74,7 @@ LabelStudioImportResult parseLabelStudioExport(const nlohmann::json& tasks) {
             const auto& value = item["value"];
 
             if (type == "rectanglelabels") {
+                groundTruth.hasDetectionAnnotation = true;
                 if (value.contains("rotation") && value["rotation"].get<double>() != 0.0) {
                     result.skippedCount++;
                     continue;
@@ -100,6 +101,7 @@ LabelStudioImportResult parseLabelStudioExport(const nlohmann::json& tasks) {
                 box.className = value["rectanglelabels"][0].get<std::string>();
                 groundTruth.boxes.push_back(std::move(box));
             } else if (type == "choices") {
+                groundTruth.hasClassificationAnnotation = true;
                 if (!value.contains("choices") || !value["choices"].is_array() || value["choices"].empty()) {
                     result.skippedCount++;
                     continue;
@@ -135,3 +137,50 @@ LabelStudioImportResult loadLabelStudioExport(const std::string& jsonPath) {
 
     return parseLabelStudioExport(tasks);
 }
+
+PredictionResultAndScore buildClassificationPredictionResult(
+    const DraftClassificationLabel& draft, const std::string& choicesFromName, const std::string& imageToName) {
+    nlohmann::json result;
+    result["from_name"] = choicesFromName;
+    result["to_name"] = imageToName;
+    result["type"] = "choices";
+    result["value"]["choices"] = nlohmann::json::array({draft.predictedLabel});
+
+    PredictionResultAndScore out;
+    out.result = nlohmann::json::array({result});
+    out.score = draft.confidence;
+    return out;
+}
+
+PredictionResultAndScore buildDetectionPredictionResult(
+    const DraftDetectionLabel& draft, const std::string& rectangleLabelsFromName, const std::string& imageToName) {
+    nlohmann::json results = nlohmann::json::array();
+    float confidenceSum = 0.0f;
+
+    for (const auto& box : draft.boxes) {
+        nlohmann::json result;
+        result["from_name"] = rectangleLabelsFromName;
+        result["to_name"] = imageToName;
+        result["type"] = "rectanglelabels";
+        result["original_width"] = draft.imageWidth;
+        result["original_height"] = draft.imageHeight;
+
+        const double width = draft.imageWidth > 0 ? static_cast<double>(draft.imageWidth) : 0.0;
+        const double height = draft.imageHeight > 0 ? static_cast<double>(draft.imageHeight) : 0.0;
+        result["value"]["x"] = width > 0.0 ? (static_cast<double>(box.box.x) / width * 100.0) : 0.0;
+        result["value"]["y"] = height > 0.0 ? (static_cast<double>(box.box.y) / height * 100.0) : 0.0;
+        result["value"]["width"] = width > 0.0 ? (static_cast<double>(box.box.width) / width * 100.0) : 0.0;
+        result["value"]["height"] = height > 0.0 ? (static_cast<double>(box.box.height) / height * 100.0) : 0.0;
+        result["value"]["rotation"] = 0;
+        result["value"]["rectanglelabels"] = nlohmann::json::array({box.className});
+
+        results.push_back(std::move(result));
+        confidenceSum += box.confidence;
+    }
+
+    PredictionResultAndScore out;
+    out.score = draft.boxes.empty() ? 0.0f : confidenceSum / static_cast<float>(draft.boxes.size());
+    out.result = std::move(results);
+    return out;
+}
+

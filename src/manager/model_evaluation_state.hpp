@@ -56,11 +56,18 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode);
 
 // Runs autoDetectModel() on slot.onnxPath and applies the result: on
 // success, pre-fills inputWidth/inputHeight, autoDetectedClassNames, hints,
-// a one-line autoDetectStatus summary, and switches state.taskMode if a
-// mode was confidently suggested. On failure, leaves existing field values
+// a one-line autoDetectStatus summary, and switches taskMode if a mode was
+// confidently suggested. On failure, leaves existing field values
 // untouched and sets autoDetectStatus to the error -- never blocks manual
-// entry.
-void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ModelEvaluationState& state);
+// entry. Takes `taskMode` directly (not the whole ModelEvaluationState) so
+// other windows with their own task-mode field can reuse this function.
+void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ComparisonTaskMode& taskMode);
+
+// Draws boxes + labels for `detections` onto a clone of `frame`. Box/label
+// size scales up with the frame's own resolution relative to an 800px-wide
+// baseline (never down), and every label is drawn on a solid background so
+// it stays readable regardless of the photo's own colors.
+cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections);
 
 enum class EvaluationSourceMode {
     Live,
@@ -158,11 +165,31 @@ struct BatchPreviewTexture {
 };
 
 struct BatchRuntime {
+    // LocalFolder mode: imageFolderPath is user-picked, groundTruth comes
+    // from a manually-exported Label Studio JSON file (groundTruthJsonPath).
+    // LabelStudioProject mode: startBatchEvaluationRun points
+    // imageFolderPath at a hidden scratch folder instead, and the worker
+    // fills in groundTruth/hasGroundTruth itself from the download phase
+    // -- from that point on, results/metrics/preview treat it exactly
+    // like the LocalFolder case.
+    BatchEvalSourceMode sourceMode = BatchEvalSourceMode::LocalFolder;
     std::string imageFolderPath;
     std::string groundTruthJsonPath;
     LabelStudioImportResult groundTruth;
     std::string groundTruthStatus;
     bool hasGroundTruth = false;
+
+    // LabelStudioProject mode connection details. labelStudioDataImageKey
+    // is auto-fetched (see syncBatchEvalLabelStudioAutoFetch) -- the key
+    // under a task's `data` holding its image path, needed to know what
+    // to download; unlike Label Assistant's push, no from_name/to_name
+    // are needed here since this only ever downloads, never pushes.
+    std::string labelStudioBaseUrl;
+    int labelStudioProjectId = 0;
+    std::string labelStudioApiToken;
+    std::string labelStudioDataImageKey;
+    std::string labelStudioAutoFetchStatus;
+    std::string lastAutoFetchKey;
 
     BatchEvaluationWorker worker;
     BatchEvalRunState runState = BatchEvalRunState::NotStarted;
@@ -201,12 +228,24 @@ struct BatchRuntime {
 // Loads and parses batch.groundTruthJsonPath into batch.groundTruth,
 // setting hasGroundTruth/groundTruthStatus. Clears ground truth (sets
 // hasGroundTruth = false) if the path is empty or parsing fails.
+// LocalFolder mode only.
 void loadBatchEvalGroundTruth(BatchRuntime& batch);
 
-// Builds a BatchEvalRunConfig from slots + batch config, clears any
-// previous results, and calls batch.worker.start(...). Caller must have
-// already verified the required slot(s) are loaded. Sets
-// batch.runState = Running.
+// Runs auto-detect on batch.labelStudioBaseUrl/ProjectId/ApiToken via the
+// shared fetchLabelStudioLabelingConfig, storing only dataImageKey (the
+// from_name/to_name it also returns are unused here). Re-fetches only
+// when that connection combination actually changes (see
+// batch.lastAutoFetchKey). LabelStudioProject mode only.
+void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch);
+
+// Builds a BatchEvalRunConfig from slots + batch config (LocalFolder:
+// imageFolderPath + any loaded groundTruth as-is; LabelStudioProject:
+// clears/recreates a hidden scratch folder, points batch.imageFolderPath
+// at it, and lets the worker fill in groundTruth itself during its
+// download phase), clears any previous results, and calls
+// batch.worker.start(...). Caller must have already verified the
+// required slot(s) are loaded (and, in LabelStudioProject mode, that the
+// connection fields are filled in). Sets batch.runState = Running.
 void startBatchEvaluationRun(
     ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch);
 
@@ -214,7 +253,9 @@ void startBatchEvaluationRun(
 // run is in progress, polls worker.progress()/tryTakeResult() and, on
 // completion, computes detection/classification metrics for both slots.
 // Always also lazily loads/annotates/uploads the currently selected
-// image's preview textures (a no-op if the selection hasn't changed).
+// image's preview textures (a no-op if the selection hasn't changed), and
+// lazily runs syncBatchEvalLabelStudioAutoFetch (a no-op unless
+// LabelStudioProject mode's connection fields are filled in and changed).
 void updateBatchRuntime(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
     BatchRuntime& batch);

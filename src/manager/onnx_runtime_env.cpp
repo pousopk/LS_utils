@@ -58,3 +58,15 @@ cv::Mat ortValueToMat(Ort::Value& value) {
     cv::Mat view(static_cast<int>(dims.size()), dims.data(), CV_32F, value.GetTensorMutableData<float>());
     return view.clone();
 }
+
+void applyChannelNormalization(
+    std::vector<float>& nchw, int height, int width,
+    const std::array<float, 3>& mean, const std::array<float, 3>& stddev) {
+    const size_t planeSize = static_cast<size_t>(height) * static_cast<size_t>(width);
+    for (size_t channel = 0; channel < 3; ++channel) {
+        float* plane = nchw.data() + channel * planeSize;
+        for (size_t i = 0; i < planeSize; ++i) {
+            plane[i] = (plane[i] - mean[channel]) / stddev[channel];
+        }
+    }
+}

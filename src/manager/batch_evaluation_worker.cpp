@@ -1,5 +1,7 @@
 #include "manager/batch_evaluation_worker.hpp"
 
+#include "manager/label_studio_client.hpp"
+
 #include <random>
 
 BatchEvaluationWorker::~BatchEvaluationWorker() {
@@ -18,6 +20,10 @@ void BatchEvaluationWorker::start(BatchEvalRunConfig config) {
     total_.store(0);
     currentSlot_.store(0);
     {
+        std::lock_guard<std::mutex> lock(phaseMutex_);
+        phaseLabel_.clear();
+    }
+    {
         std::lock_guard<std::mutex> lock(resultMutex_);
         hasResult_ = false;
     }
@@ -30,7 +36,8 @@ void BatchEvaluationWorker::requestCancel() {
 }
 
 BatchEvalProgress BatchEvaluationWorker::progress() const {
-    return BatchEvalProgress{currentSlot_.load(), completed_.load(), total_.load()};
+    std::lock_guard<std::mutex> lock(phaseMutex_);
+    return BatchEvalProgress{currentSlot_.load(), completed_.load(), total_.load(), phaseLabel_};
 }
 
 bool BatchEvaluationWorker::tryTakeResult(BatchEvalRunResult& out) {
@@ -43,7 +50,54 @@ bool BatchEvaluationWorker::tryTakeResult(BatchEvalRunResult& out) {
     return true;
 }
 
+void BatchEvaluationWorker::finish(BatchEvalRunResult result) {
+    std::lock_guard<std::mutex> lock(resultMutex_);
+    latestResult_ = std::move(result);
+    hasResult_ = true;
+    running_.store(false);
+}
+
 void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
+    if (config.source == BatchEvalSourceMode::LabelStudioProject) {
+        {
+            std::lock_guard<std::mutex> lock(phaseMutex_);
+            phaseLabel_ = "Downloading";
+        }
+        completed_.store(0);
+        total_.store(0);
+
+        const auto onDownloadProgress = [this](int completed, int total) {
+            completed_.store(completed);
+            total_.store(total);
+        };
+
+        const LabelStudioGroundTruthDataset dataset = fetchAndDownloadLabeledDataset(
+            config.labelStudioBaseUrl, config.labelStudioProjectId, config.labelStudioApiToken,
+            config.labelStudioDataImageKey, config.scratchFolderPath, onDownloadProgress, &cancelRequested_);
+
+        if (cancelRequested_.load()) {
+            BatchEvalRunResult result;
+            result.cancelled = true;
+            finish(std::move(result));
+            return;
+        }
+        if (!dataset.error.empty()) {
+            BatchEvalRunResult result;
+            result.slotA.error = dataset.error;
+            finish(std::move(result));
+            return;
+        }
+
+        config.imageFolderPath = config.scratchFolderPath;
+        config.groundTruth = dataset.groundTruth;
+        config.hasGroundTruth = true;
+
+        {
+            std::lock_guard<std::mutex> lock(phaseMutex_);
+            phaseLabel_.clear();
+        }
+    }
+
     const LabelStudioImportResult* groundTruth = config.hasGroundTruth ? &config.groundTruth : nullptr;
     // Drawn once per run and reused for both slots -- if sampling is on, A
     // and B must be evaluated against the identical random subset or their
@@ -106,11 +160,5 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
     }
 
     result.cancelled = cancelRequested_.load();
-
-    {
-        std::lock_guard<std::mutex> lock(resultMutex_);
-        latestResult_ = std::move(result);
-        hasResult_ = true;
-    }
-    running_.store(false);
+    finish(std::move(result));
 }

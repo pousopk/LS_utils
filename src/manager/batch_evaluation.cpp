@@ -129,8 +129,19 @@ BatchEvaluationResult runDetectionBatchEvaluation(
             std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename);
-            gt != nullptr && gt->hasDetectionAnnotation) {
+        // A task can be reviewed and submitted with an empty result array
+        // (a human confirming "nothing here"), which leaves both
+        // hasDetectionAnnotation and hasClassificationAnnotation false --
+        // parseLabelStudioExport only sets either from an item actually
+        // present in that array. Treat that untyped-but-reviewed case as
+        // valid detection ground truth (zero boxes) too, so a real
+        // false-positive detection against a confirmed-empty image doesn't
+        // silently vanish as "no ground truth". Don't do this when the
+        // other type's flag is set (gt->hasClassificationAnnotation) --
+        // that means this task was reviewed for classification only, not
+        // for detection at all.
+        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename); gt != nullptr
+            && (gt->hasDetectionAnnotation || !gt->hasClassificationAnnotation)) {
             imageResult.groundTruthBoxes = gt->boxes;
             imageResult.hasGroundTruth = true;
             result.imagesWithGroundTruth++;
@@ -185,8 +196,12 @@ BatchEvaluationResult runClassificationBatchEvaluation(
             std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename);
-            gt != nullptr && gt->hasClassificationAnnotation) {
+        // See the matching comment in runDetectionBatchEvaluation -- an
+        // untyped-but-reviewed (empty result array) annotation counts as
+        // valid classification ground truth (empty label) too, unless it
+        // was actually reviewed for detection only.
+        if (const ImageGroundTruth* gt = findGroundTruth(groundTruth, imageResult.imageFilename); gt != nullptr
+            && (gt->hasClassificationAnnotation || !gt->hasDetectionAnnotation)) {
             imageResult.groundTruthLabel = gt->classificationLabel;
             imageResult.hasGroundTruth = true;
             result.imagesWithGroundTruth++;

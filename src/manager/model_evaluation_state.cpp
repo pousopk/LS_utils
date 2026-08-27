@@ -1,11 +1,14 @@
 #include "manager/model_evaluation_state.hpp"
 
+#include "manager/label_studio_client.hpp"
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 
 namespace {
@@ -29,6 +32,46 @@ std::vector<std::string> loadClassNamesFromFile(const std::string& path) {
 }
 
 } // namespace
+
+// Box/label size scales UP with the frame's own resolution relative to an
+// 800px-wide baseline (never down -- a photo smaller than the baseline
+// still gets full-size text, since shrinking further only makes small
+// source photos worse), and every label is drawn on a solid background so
+// it stays readable regardless of what color the photo behind it is
+// (green-on-green or green-on-white was otherwise invisible no matter the
+// font size).
+cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections) {
+    cv::Mat annotated = frame.clone();
+    const float scale = std::clamp(static_cast<float>(frame.cols) / 800.0f, 1.0f, 3.0f);
+    const int boxThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
+    const int textThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
+    const double fontScale = 0.85 * scale;
+    for (const auto& detection : detections) {
+        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), boxThickness);
+
+        const std::string label =
+            detection.className + " " + std::to_string(static_cast<int>(detection.confidence * 100)) + "%";
+        int baseline = 0;
+        const cv::Size textSize =
+            cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, textThickness, &baseline);
+
+        // Prefer just above the box; drop to just inside its top edge
+        // instead if that would clip off the top of the frame.
+        const int margin = 4;
+        const int aboveTop = detection.box.y - margin - textSize.height - baseline;
+        const int top = aboveTop >= 0 ? aboveTop : detection.box.y + margin;
+        const cv::Point textOrigin(detection.box.x, top + textSize.height);
+
+        cv::rectangle(
+            annotated, cv::Point(textOrigin.x - 2, top - 2),
+            cv::Point(textOrigin.x + textSize.width + 2, top + textSize.height + baseline + 2),
+            cv::Scalar(0, 0, 0), cv::FILLED);
+        cv::putText(
+            annotated, label, textOrigin, cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), textThickness,
+            cv::LINE_AA);
+    }
+    return annotated;
+}
 
 void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
     slot.loadError.clear();
@@ -79,7 +122,7 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
     }
 }
 
-void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ModelEvaluationState& state) {
+void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ComparisonTaskMode& taskMode) {
     const ModelAutoDetectResult result = autoDetectModel(slot.onnxPath);
 
     if (!result.shapeDetected) {
@@ -96,13 +139,13 @@ void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ModelEvaluationState& sta
         "Detected " + std::to_string(result.inputWidth) + "x" + std::to_string(result.inputHeight);
     if (result.suggestedMode == DetectedTaskMode::Detection) {
         statusMessage += ", suggested: Detection";
-        state.taskMode = ComparisonTaskMode::Detection;
+        taskMode = ComparisonTaskMode::Detection;
     } else if (result.suggestedMode == DetectedTaskMode::Classification) {
         statusMessage += ", suggested: Classification";
-        state.taskMode = ComparisonTaskMode::Classification;
+        taskMode = ComparisonTaskMode::Classification;
     } else if (result.suggestedMode == DetectedTaskMode::Anomaly) {
         statusMessage += ", suggested: Anomaly";
-        state.taskMode = ComparisonTaskMode::Anomaly;
+        taskMode = ComparisonTaskMode::Anomaly;
     }
     if (result.anomalyHints.present) {
         slot.anomalyScoreMin = result.anomalyHints.minimum;
@@ -134,46 +177,6 @@ cv::Mat currentLiveFrame(const LiveRuntime& live, std::vector<CameraSession>& se
         return live.loadedSource->grabFrame();
     }
     return cv::Mat();
-}
-
-// Box/label size scales UP with the frame's own resolution relative to an
-// 800px-wide baseline (never down -- a photo smaller than the baseline
-// still gets full-size text, since shrinking further only makes small
-// source photos worse), and every label is drawn on a solid background so
-// it stays readable regardless of what color the photo behind it is
-// (green-on-green or green-on-white was otherwise invisible no matter the
-// font size).
-cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections) {
-    cv::Mat annotated = frame.clone();
-    const float scale = std::clamp(static_cast<float>(frame.cols) / 800.0f, 1.0f, 3.0f);
-    const int boxThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
-    const int textThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
-    const double fontScale = 0.85 * scale;
-    for (const auto& detection : detections) {
-        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), boxThickness);
-
-        const std::string label =
-            detection.className + " " + std::to_string(static_cast<int>(detection.confidence * 100)) + "%";
-        int baseline = 0;
-        const cv::Size textSize =
-            cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, textThickness, &baseline);
-
-        // Prefer just above the box; drop to just inside its top edge
-        // instead if that would clip off the top of the frame.
-        const int margin = 4;
-        const int aboveTop = detection.box.y - margin - textSize.height - baseline;
-        const int top = aboveTop >= 0 ? aboveTop : detection.box.y + margin;
-        const cv::Point textOrigin(detection.box.x, top + textSize.height);
-
-        cv::rectangle(
-            annotated, cv::Point(textOrigin.x - 2, top - 2),
-            cv::Point(textOrigin.x + textSize.width + 2, top + textSize.height + baseline + 2),
-            cv::Scalar(0, 0, 0), cv::FILLED);
-        cv::putText(
-            annotated, label, textOrigin, cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), textThickness,
-            cv::LINE_AA);
-    }
-    return annotated;
 }
 
 cv::Mat annotateAnomalyHeatmap(const cv::Mat& frame, const AnomalyResult& result) {
@@ -401,15 +404,71 @@ void loadBatchEvalGroundTruth(BatchRuntime& batch) {
     }
 }
 
+void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch) {
+    if (batch.labelStudioBaseUrl.empty() || batch.labelStudioProjectId <= 0 || batch.labelStudioApiToken.empty()) {
+        return;
+    }
+    const std::string key =
+        batch.labelStudioBaseUrl + "|" + std::to_string(batch.labelStudioProjectId) + "|" + batch.labelStudioApiToken;
+    if (key == batch.lastAutoFetchKey) {
+        return;
+    }
+    batch.lastAutoFetchKey = key;
+
+    // isDetection doesn't matter here -- dataImageKey extraction doesn't
+    // depend on it, and from_name/to_name (which does) are unused by this
+    // download-only flow.
+    const LabelStudioLabelingConfig config =
+        fetchLabelStudioLabelingConfig(batch.labelStudioBaseUrl, batch.labelStudioProjectId, batch.labelStudioApiToken, true);
+
+    if (config.error.empty()) {
+        batch.labelStudioDataImageKey = config.dataImageKey;
+        batch.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
+    } else {
+        batch.labelStudioAutoFetchStatus = "Labeling config: " + config.error;
+    }
+}
+
+namespace {
+
+// Fixed, hidden scratch location for BatchRuntime's LabelStudioProject
+// source mode downloads -- cleared and recreated at the start of every
+// run, and deliberately separate from Label Assistant's own scratch
+// folder so the two windows never collide.
+std::string batchEvalScratchFolder() {
+    return (std::filesystem::temp_directory_path() / "vision_app_batch_eval_download").string();
+}
+
+} // namespace
+
 void startBatchEvaluationRun(
     ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch) {
     BatchEvalRunConfig config;
     config.mode = mode;
-    config.imageFolderPath = batch.imageFolderPath;
-    config.hasGroundTruth = batch.hasGroundTruth;
-    if (batch.hasGroundTruth) {
-        config.groundTruth = batch.groundTruth;
+    config.source = batch.sourceMode;
+
+    if (batch.sourceMode == BatchEvalSourceMode::LabelStudioProject) {
+        const std::string scratchFolder = batchEvalScratchFolder();
+        std::error_code ec;
+        std::filesystem::remove_all(scratchFolder, ec);
+        std::filesystem::create_directories(scratchFolder, ec);
+
+        config.labelStudioBaseUrl = batch.labelStudioBaseUrl;
+        config.labelStudioProjectId = batch.labelStudioProjectId;
+        config.labelStudioApiToken = batch.labelStudioApiToken;
+        config.labelStudioDataImageKey = batch.labelStudioDataImageKey;
+        config.scratchFolderPath = scratchFolder;
+        batch.imageFolderPath = scratchFolder;
+        // groundTruth/hasGroundTruth are left default -- the worker fills
+        // them in itself during the download phase.
+    } else {
+        config.imageFolderPath = batch.imageFolderPath;
+        config.hasGroundTruth = batch.hasGroundTruth;
+        if (batch.hasGroundTruth) {
+            config.groundTruth = batch.groundTruth;
+        }
     }
+
     config.runSlotB = compareTwoModels;
     config.sampleSize = batch.sampleEnabled ? batch.sampleSize : 0;
     config.detectionModelA = slots[0].detectionModel;
@@ -450,6 +509,15 @@ void updateBatchRuntime(
             } else {
                 batch.resultA = std::move(runResult.slotA);
                 batch.resultB = std::move(runResult.slotB);
+                // Recompute from the actual run results rather than trusting
+                // the pre-run flag: LabelStudioProject source mode never sets
+                // batch.hasGroundTruth itself (ground truth is fetched and
+                // attached per-image inside the worker), so the aggregate
+                // metrics/mismatch-filter gate below would otherwise stay
+                // permanently false even when every image matched real
+                // ground truth.
+                batch.hasGroundTruth =
+                    batch.resultA.imagesWithGroundTruth > 0 || batch.resultB.imagesWithGroundTruth > 0;
                 if (mode == ComparisonTaskMode::Detection) {
                     batch.detectionMetricsA = computeDetectionMetrics(toDetectionEvaluationItems(batch.resultA));
                     batch.detectionMetricsB = computeDetectionMetrics(toDetectionEvaluationItems(batch.resultB));
@@ -464,6 +532,8 @@ void updateBatchRuntime(
             }
         }
     }
+
+    syncBatchEvalLabelStudioAutoFetch(batch);
 
     syncBatchEvalSelectedPreview(mode, slots, imageFolderPath, batch);
 }
