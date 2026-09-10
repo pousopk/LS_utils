@@ -25,7 +25,7 @@ void drawEntryList(TimestampSearchState& state) {
         state.toleranceMinutes = 0;
     }
 
-    ImGui::InputTextWithHint("##NewTimestampEntry", "YYYY/MM/DD HH:MM:SS (UTC)", &state.newEntryText);
+    ImGui::InputTextWithHint("##NewTimestampEntry", "YYYY/MM/DD HH:MM:SS (local time)", &state.newEntryText);
     ImGui::SameLine();
     if (ImGui::Button("Add") && !state.newEntryText.empty()) {
         state.entries.push_back(TimestampSearchEntry{state.newEntryText});
@@ -36,7 +36,7 @@ void drawEntryList(TimestampSearchState& state) {
     int removeIndex = -1;
     for (int i = 0; i < static_cast<int>(state.entries.size()); ++i) {
         ImGui::PushID(i);
-        const bool valid = parseTypedUtcTimestamp(state.entries[i].rawText).has_value();
+        const bool valid = parseTypedLocalTimestamp(state.entries[i].rawText).has_value();
         if (!valid) {
             ImGui::TextColored(
                 ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s (invalid format)", state.entries[i].rawText.c_str());
@@ -77,7 +77,7 @@ void drawSearchBar(TimestampSearchState& state) {
 
     bool anyValidEntry = false;
     for (const auto& entry : state.entries) {
-        if (parseTypedUtcTimestamp(entry.rawText).has_value()) {
+        if (parseTypedLocalTimestamp(entry.rawText).has_value()) {
             anyValidEntry = true;
             break;
         }

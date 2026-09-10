@@ -1,6 +1,7 @@
 #include "manager/label_studio_client.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
 int g_failures = 0;
@@ -11,6 +12,38 @@ void check(bool condition, const char* expr, const char* file, int line) {
         g_failures++;
     }
 }
+
+// parseTypedLocalTimestamp depends on the process's configured timezone
+// (via mktime), so tests that need a deterministic result pin TZ for the
+// duration of the call and restore it afterward -- otherwise the expected
+// epoch would depend on whatever timezone happens to be set on the
+// machine running the tests.
+class ScopedTz {
+public:
+    explicit ScopedTz(const char* tz) {
+        const char* existing = std::getenv("TZ");
+        hadPrevious_ = existing != nullptr;
+        if (hadPrevious_) {
+            previous_ = existing;
+        }
+        setenv("TZ", tz, 1);
+        tzset();
+    }
+    ~ScopedTz() {
+        if (hadPrevious_) {
+            setenv("TZ", previous_.c_str(), 1);
+        } else {
+            unsetenv("TZ");
+        }
+        tzset();
+    }
+    ScopedTz(const ScopedTz&) = delete;
+    ScopedTz& operator=(const ScopedTz&) = delete;
+
+private:
+    bool hadPrevious_ = false;
+    std::string previous_;
+};
 } // namespace
 
 #define CHECK(cond) check((cond), #cond, __FILE__, __LINE__)
@@ -34,16 +67,30 @@ void test_parseIso8601Utc_malformedReturnsNullopt() {
     CHECK(!parseIso8601Utc("").has_value());
 }
 
-void test_parseTypedUtcTimestamp_standardFormat() {
-    const auto result = parseTypedUtcTimestamp("2026/09/10 12:00:00");
+void test_parseTypedLocalTimestamp_interpretedAsUtcWhenTzIsUtc() {
+    ScopedTz tz("UTC");
+    const auto result = parseTypedLocalTimestamp("2026/09/10 12:00:00");
     CHECK(result.has_value());
     CHECK(*result == 1789041600);
 }
 
-void test_parseTypedUtcTimestamp_malformedReturnsNullopt() {
-    CHECK(!parseTypedUtcTimestamp("2026-09-10 12:00:00").has_value()); // wrong separators
-    CHECK(!parseTypedUtcTimestamp("garbage").has_value());
-    CHECK(!parseTypedUtcTimestamp("").has_value());
+void test_parseTypedLocalTimestamp_convertsFromLocalTimezone() {
+    // Etc/GMT-2 is a fixed UTC+2 offset (POSIX's Etc/GMT sign convention
+    // is inverted). 2026-06-22T14:15:38 local (UTC+2) is
+    // 2026-06-22T12:15:38Z -- a real-world case: a factory timestamp
+    // engraved in local time, matched against Label Studio's UTC
+    // created_at ("2026-06-22T12:15:38.416491Z" for the same piece).
+    ScopedTz tz("Etc/GMT-2");
+    const auto result = parseTypedLocalTimestamp("2026/06/22 14:15:38");
+    CHECK(result.has_value());
+    CHECK(*result == 1782130538);
+}
+
+void test_parseTypedLocalTimestamp_malformedReturnsNullopt() {
+    ScopedTz tz("UTC");
+    CHECK(!parseTypedLocalTimestamp("2026-09-10 12:00:00").has_value()); // wrong separators
+    CHECK(!parseTypedLocalTimestamp("garbage").has_value());
+    CHECK(!parseTypedLocalTimestamp("").has_value());
 }
 
 void test_matchTasksToTimestamps_withinToleranceAndSorted() {
@@ -126,8 +173,9 @@ int main() {
     test_parseIso8601Utc_standardFormat();
     test_parseIso8601Utc_withFractionalSecondsAndZ();
     test_parseIso8601Utc_malformedReturnsNullopt();
-    test_parseTypedUtcTimestamp_standardFormat();
-    test_parseTypedUtcTimestamp_malformedReturnsNullopt();
+    test_parseTypedLocalTimestamp_interpretedAsUtcWhenTzIsUtc();
+    test_parseTypedLocalTimestamp_convertsFromLocalTimezone();
+    test_parseTypedLocalTimestamp_malformedReturnsNullopt();
     test_matchTasksToTimestamps_withinToleranceAndSorted();
     test_matchTasksToTimestamps_toleranceBoundaryInclusive();
     test_matchTasksToTimestamps_skipsTaskMissingCreatedAtOrDataKey();

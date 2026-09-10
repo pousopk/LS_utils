@@ -30,13 +30,19 @@ std::string extractXmlTagNameAttribute(const std::string& xml, const std::string
 // "%Y-%m-%dT%H:%M:%S" at minimum.
 std::optional<std::time_t> parseIso8601Utc(const std::string& value);
 
-// Pure function: parses a manually-typed factory timestamp in
-// "YYYY/MM/DD HH:MM:SS" UTC format (e.g. "2026/09/10 12:00:00") into
-// epoch seconds. Returns std::nullopt on any format mismatch.
-std::optional<std::time_t> parseTypedUtcTimestamp(const std::string& value);
+// Parses a manually-typed factory timestamp in "YYYY/MM/DD HH:MM:SS"
+// format (e.g. "2026/09/10 12:00:00") as LOCAL time -- the timestamp
+// engraved on a physical piece reflects wherever/whenever it was
+// engraved, not UTC, and comparing it against Label Studio's UTC
+// `created_at` requires converting it first. Uses mktime, so it respects
+// the running machine's configured timezone and DST rules; this assumes
+// the machine running vision_app is set to the same timezone as the
+// factory. Returns std::nullopt on any format mismatch. Not a pure
+// function (mktime depends on the process's timezone setting).
+std::optional<std::time_t> parseTypedLocalTimestamp(const std::string& value);
 
 struct TimestampMatchQuery {
-    std::time_t timestamp = 0;        // epoch seconds, e.g. from parseTypedUtcTimestamp
+    std::time_t timestamp = 0;        // epoch seconds, e.g. from parseTypedLocalTimestamp
     long long toleranceSeconds = 0;   // symmetric window: [timestamp - toleranceSeconds, timestamp + toleranceSeconds]
 };
 

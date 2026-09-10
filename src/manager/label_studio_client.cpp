@@ -88,31 +88,44 @@ std::string extractXmlTagNameAttribute(const std::string& xml, const std::string
 
 namespace {
 
-// timegm is POSIX (available on this app's only build target, Linux) --
-// unlike mktime, it interprets `tm` as UTC instead of the local timezone,
-// which is exactly what both callers below need.
-std::optional<std::time_t> parseUtcWithFormat(const std::string& value, const char* format) {
+std::optional<std::tm> parseTmWithFormat(const std::string& value, const char* format) {
     std::tm tm{};
     std::istringstream iss(value);
     iss >> std::get_time(&tm, format);
     if (iss.fail()) {
         return std::nullopt;
     }
-    const std::time_t result = timegm(&tm);
+    return tm;
+}
+
+} // namespace
+
+std::optional<std::time_t> parseIso8601Utc(const std::string& value) {
+    std::optional<std::tm> tm = parseTmWithFormat(value, "%Y-%m-%dT%H:%M:%S");
+    if (!tm) {
+        return std::nullopt;
+    }
+    // timegm is POSIX (available on this app's only build target, Linux)
+    // -- unlike mktime, it interprets `tm` as UTC instead of the local
+    // timezone, matching Label Studio's `created_at` format exactly.
+    const std::time_t result = timegm(&*tm);
     if (result == static_cast<std::time_t>(-1)) {
         return std::nullopt;
     }
     return result;
 }
 
-} // namespace
-
-std::optional<std::time_t> parseIso8601Utc(const std::string& value) {
-    return parseUtcWithFormat(value, "%Y-%m-%dT%H:%M:%S");
-}
-
-std::optional<std::time_t> parseTypedUtcTimestamp(const std::string& value) {
-    return parseUtcWithFormat(value, "%Y/%m/%d %H:%M:%S");
+std::optional<std::time_t> parseTypedLocalTimestamp(const std::string& value) {
+    std::optional<std::tm> tm = parseTmWithFormat(value, "%Y/%m/%d %H:%M:%S");
+    if (!tm) {
+        return std::nullopt;
+    }
+    tm->tm_isdst = -1; // let mktime determine DST for this date from the system's timezone rules
+    const std::time_t result = mktime(&*tm);
+    if (result == static_cast<std::time_t>(-1)) {
+        return std::nullopt;
+    }
+    return result;
 }
 
 LabelStudioLabelingConfig fetchLabelStudioLabelingConfig(

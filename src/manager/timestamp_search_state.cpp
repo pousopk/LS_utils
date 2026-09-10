@@ -88,7 +88,7 @@ void startTimestampSearch(TimestampSearchState& state) {
     std::vector<TimestampMatchQuery> queries;
     std::vector<TimestampSearchEntry> searchedEntries;
     for (const auto& entry : state.entries) {
-        const std::optional<std::time_t> parsed = parseTypedUtcTimestamp(entry.rawText);
+        const std::optional<std::time_t> parsed = parseTypedLocalTimestamp(entry.rawText);
         if (!parsed) {
             continue;
         }
