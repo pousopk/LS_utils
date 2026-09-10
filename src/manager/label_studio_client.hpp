@@ -35,6 +35,29 @@ std::optional<std::time_t> parseIso8601Utc(const std::string& value);
 // epoch seconds. Returns std::nullopt on any format mismatch.
 std::optional<std::time_t> parseTypedUtcTimestamp(const std::string& value);
 
+struct TimestampMatchQuery {
+    std::time_t timestamp = 0;        // epoch seconds, e.g. from parseTypedUtcTimestamp
+    long long toleranceSeconds = 0;   // symmetric window: [timestamp - toleranceSeconds, timestamp + toleranceSeconds]
+};
+
+struct TimestampMatchCandidate {
+    int taskId = 0;
+    std::string imagePath;      // task.data[dataImageKey]
+    std::time_t createdAt = 0;  // epoch seconds
+    long long deltaSeconds = 0; // createdAt - query.timestamp (negative if the task predates the query)
+};
+
+// Pure function: for each of `queries` (result vector is the same length
+// and order), returns every task in `tasksJson` whose `created_at` falls
+// within [timestamp - toleranceSeconds, timestamp + toleranceSeconds],
+// sorted by abs(deltaSeconds) ascending (closest first). Tasks missing
+// `id`, missing/unparseable `created_at`, or missing `data[dataImageKey]`
+// as a string are skipped -- same tolerance for partial task records as
+// selectUnlabeledTasks/selectLabeledTasks. A task can appear under more
+// than one query if the windows overlap.
+std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
+    const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
+
 struct LabelStudioLabelingConfig {
     std::string fromName;
     std::string toName;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -271,6 +272,65 @@ std::vector<LabelStudioLabeledTask> selectLabeledTasks(
         labeled.taskId = task["id"].get<int>();
         labeled.imagePath = data[dataImageKey].get<std::string>();
         result.push_back(std::move(labeled));
+    }
+
+    return result;
+}
+
+std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
+    const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries) {
+    std::vector<std::vector<TimestampMatchCandidate>> result(queries.size());
+
+    const nlohmann::json* tasks = &tasksJson;
+    if (tasksJson.is_object() && tasksJson.contains("tasks") && tasksJson["tasks"].is_array()) {
+        tasks = &tasksJson["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return result;
+    }
+
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        if (!task.contains("created_at") || !task["created_at"].is_string()) {
+            continue;
+        }
+        const std::optional<std::time_t> createdAt = parseIso8601Utc(task["created_at"].get<std::string>());
+        if (!createdAt) {
+            continue;
+        }
+        if (!task.contains("data") || !task["data"].is_object()) {
+            continue;
+        }
+        const auto& data = task["data"];
+        if (!data.contains(dataImageKey) || !data[dataImageKey].is_string()) {
+            continue;
+        }
+
+        TimestampMatchCandidate base;
+        base.taskId = task["id"].get<int>();
+        base.imagePath = data[dataImageKey].get<std::string>();
+        base.createdAt = *createdAt;
+
+        for (size_t i = 0; i < queries.size(); ++i) {
+            const long long delta =
+                static_cast<long long>(*createdAt) - static_cast<long long>(queries[i].timestamp);
+            if (std::llabs(delta) > queries[i].toleranceSeconds) {
+                continue;
+            }
+            TimestampMatchCandidate candidate = base;
+            candidate.deltaSeconds = delta;
+            result[i].push_back(candidate);
+        }
+    }
+
+    for (auto& candidates : result) {
+        std::sort(
+            candidates.begin(), candidates.end(),
+            [](const TimestampMatchCandidate& a, const TimestampMatchCandidate& b) {
+                return std::llabs(a.deltaSeconds) < std::llabs(b.deltaSeconds);
+            });
     }
 
     return result;
