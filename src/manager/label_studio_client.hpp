@@ -3,6 +3,7 @@
 #include "manager/label_studio_import.hpp"
 
 #include <atomic>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <nlohmann/json_fwd.hpp>
@@ -21,6 +22,18 @@ std::string extractXmlTagAttribute(const std::string& xml, const std::string& ta
 
 // Pure function: extractXmlTagAttribute(xml, tagName, "name").
 std::string extractXmlTagNameAttribute(const std::string& xml, const std::string& tagName);
+
+// Pure function: parses Label Studio's `created_at` timestamp format
+// (ISO-8601 UTC, e.g. "2024-05-01T12:34:56.789012Z" -- fractional seconds
+// and/or a trailing "Z" are both tolerated and ignored) into epoch
+// seconds. Returns std::nullopt if the string doesn't match
+// "%Y-%m-%dT%H:%M:%S" at minimum.
+std::optional<std::time_t> parseIso8601Utc(const std::string& value);
+
+// Pure function: parses a manually-typed factory timestamp in
+// "YYYY/MM/DD HH:MM:SS" UTC format (e.g. "2026/09/10 12:00:00") into
+// epoch seconds. Returns std::nullopt on any format mismatch.
+std::optional<std::time_t> parseTypedUtcTimestamp(const std::string& value);
 
 struct LabelStudioLabelingConfig {
     std::string fromName;

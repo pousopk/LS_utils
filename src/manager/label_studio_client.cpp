@@ -7,7 +7,9 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <regex>
+#include <sstream>
 
 namespace {
 
@@ -81,6 +83,35 @@ std::string extractXmlTagAttribute(const std::string& xml, const std::string& ta
 
 std::string extractXmlTagNameAttribute(const std::string& xml, const std::string& tagName) {
     return extractXmlTagAttribute(xml, tagName, "name");
+}
+
+namespace {
+
+// timegm is POSIX (available on this app's only build target, Linux) --
+// unlike mktime, it interprets `tm` as UTC instead of the local timezone,
+// which is exactly what both callers below need.
+std::optional<std::time_t> parseUtcWithFormat(const std::string& value, const char* format) {
+    std::tm tm{};
+    std::istringstream iss(value);
+    iss >> std::get_time(&tm, format);
+    if (iss.fail()) {
+        return std::nullopt;
+    }
+    const std::time_t result = timegm(&tm);
+    if (result == static_cast<std::time_t>(-1)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+} // namespace
+
+std::optional<std::time_t> parseIso8601Utc(const std::string& value) {
+    return parseUtcWithFormat(value, "%Y-%m-%dT%H:%M:%S");
+}
+
+std::optional<std::time_t> parseTypedUtcTimestamp(const std::string& value) {
+    return parseUtcWithFormat(value, "%Y/%m/%d %H:%M:%S");
 }
 
 LabelStudioLabelingConfig fetchLabelStudioLabelingConfig(
