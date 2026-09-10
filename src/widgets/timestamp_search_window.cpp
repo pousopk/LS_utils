@@ -117,6 +117,13 @@ void drawResults(TimestampSearchState& state) {
                 const ImVec2 size =
                     fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 160.0f, 160.0f);
                 ImGui::Image((void*)(intptr_t)candidateView.texture, size);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                    ImGui::BeginTooltip();
+                    const ImVec2 largeSize =
+                        fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 480.0f, 480.0f);
+                    ImGui::Image((void*)(intptr_t)candidateView.texture, largeSize);
+                    ImGui::EndTooltip();
+                }
             } else {
                 ImGui::TextDisabled("(image unavailable)");
             }
