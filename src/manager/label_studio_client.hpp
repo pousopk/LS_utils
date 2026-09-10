@@ -58,6 +58,35 @@ struct TimestampMatchCandidate {
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
 
+struct FindTasksNearTimestampsResult {
+    std::vector<std::vector<TimestampMatchCandidate>> perQuery;   // same order/length as `queries`
+    std::string error;   // set only on a hard failure to fetch the task list; zero candidates for a query is normal
+};
+
+// Fetches the project's full task list once (the same paged `fields=all`
+// fetch every other Label Studio flow here uses) and matches it against
+// `queries` via matchTasksToTimestamps.
+FindTasksNearTimestampsResult findTasksNearTimestamps(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
+    const std::vector<TimestampMatchQuery>& queries);
+
+struct LabelStudioTaskImageDownload {
+    int downloaded = 0;
+    int downloadFailed = 0;
+};
+
+// Downloads each of `candidates`' images into `outputFolder` as
+// `<taskId><original extension>`, same convention as
+// fetchAndDownloadUnlabeledTasks. Candidates are not deduplicated by this
+// function -- pass an already-deduplicated list if the same task appears
+// under more than one timestamp query. `outputFolder` is not created or
+// cleared by this function. `onProgress`/`cancelRequested` behave exactly
+// as fetchAndDownloadUnlabeledTasks's.
+LabelStudioTaskImageDownload downloadLabelStudioTaskImages(
+    const std::string& baseUrl, const std::string& apiToken, const std::vector<TimestampMatchCandidate>& candidates,
+    const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
+
 struct LabelStudioLabelingConfig {
     std::string fromName;
     std::string toName;

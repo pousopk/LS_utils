@@ -650,6 +650,56 @@ LabelStudioDownloadResult fetchAndDownloadUnlabeledTasks(
     return result;
 }
 
+FindTasksNearTimestampsResult findTasksNearTimestamps(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
+    const std::vector<TimestampMatchQuery>& queries) {
+    FindTasksNearTimestampsResult result;
+
+    nlohmann::json allTasks;
+    std::string fetchError;
+    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, fetchError)) {
+        result.error = fetchError;
+        return result;
+    }
+
+    result.perQuery = matchTasksToTimestamps(allTasks, dataImageKey, queries);
+    return result;
+}
+
+LabelStudioTaskImageDownload downloadLabelStudioTaskImages(
+    const std::string& baseUrl, const std::string& apiToken, const std::vector<TimestampMatchCandidate>& candidates,
+    const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested) {
+    LabelStudioTaskImageDownload result;
+
+    const int total = static_cast<int>(candidates.size());
+    int completed = 0;
+
+    for (const auto& candidate : candidates) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            return result;
+        }
+
+        const std::string extension = std::filesystem::path(candidate.imagePath).extension().string();
+        const std::string localPath =
+            (std::filesystem::path(outputFolder) / (std::to_string(candidate.taskId) + extension)).string();
+
+        std::string downloadError;
+        if (downloadTaskImage(baseUrl, apiToken, candidate.imagePath, localPath, downloadError)) {
+            result.downloaded++;
+        } else {
+            result.downloadFailed++;
+        }
+
+        completed++;
+        if (onProgress) {
+            onProgress(completed, total);
+        }
+    }
+
+    return result;
+}
+
 LabelStudioAttachSummary attachPredictionsToKnownTasks(
     const std::string& baseUrl, const std::string& apiToken,
     const std::vector<LabelStudioKnownTaskPrediction>& predictions) {
