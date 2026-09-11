@@ -468,6 +468,72 @@ void test_rleRoundTrip_runLongerThan65536Chunks() {
     CHECK(allMatch);
 }
 
+void test_buildBrushLabelResult_oneItemPerRegion() {
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region1;
+    region1.mask = maskFromRows({{0, 255}, {255, 0}});
+    region1.className = "Defect";
+    regions.push_back(region1);
+    DraftBrushRegion region2;
+    region2.mask = maskFromRows({{255, 255}, {0, 0}});
+    region2.className = "Scratch";
+    regions.push_back(region2);
+
+    const auto result = buildBrushLabelResult(regions, "brush", "image", 2, 2);
+    CHECK(result.size() == 2);
+    CHECK(result[0]["type"] == "brushlabels");
+    CHECK(result[0]["from_name"] == "brush");
+    CHECK(result[0]["to_name"] == "image");
+    CHECK(result[0]["original_width"] == 2);
+    CHECK(result[0]["original_height"] == 2);
+    CHECK(result[0]["value"]["format"] == "rle");
+    CHECK(result[0]["value"]["brushlabels"][0] == "Defect");
+    CHECK(result[1]["value"]["brushlabels"][0] == "Scratch");
+}
+
+void test_buildBrushLabelResult_skipsEmptyMask() {
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region;
+    region.className = "Defect"; // mask left default-constructed (empty)
+    regions.push_back(region);
+    CHECK(buildBrushLabelResult(regions, "brush", "image", 10, 10).empty());
+}
+
+void test_parseBrushResultRegions_roundTripsThroughBuild() {
+    std::vector<DraftBrushRegion> original;
+    DraftBrushRegion region;
+    region.mask = maskFromRows({{0, 255, 0}, {255, 255, 0}});
+    region.className = "Defect";
+    original.push_back(region);
+
+    const auto built = buildBrushLabelResult(original, "brush", "image", 3, 2);
+    const auto parsed = parseBrushResultRegions(built, "brush");
+
+    CHECK(parsed.size() == 1);
+    CHECK(parsed[0].className == "Defect");
+    CHECK(parsed[0].mask.rows == 2);
+    CHECK(parsed[0].mask.cols == 3);
+    bool allMatch = true;
+    for (int r = 0; r < 2; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            if (parsed[0].mask.at<uint8_t>(r, c) != original[0].mask.at<uint8_t>(r, c)) {
+                allMatch = false;
+            }
+        }
+    }
+    CHECK(allMatch);
+}
+
+void test_parseBrushResultRegions_filtersByFromNameAndType() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "brushlabels", "from_name": "otherBrush", "to_name": "image",
+         "original_width": 2, "original_height": 2,
+         "value": {"format": "rle", "rle": [0], "brushlabels": ["Defect"]}},
+        {"type": "rectanglelabels", "from_name": "brush", "to_name": "image"}
+    ])");
+    CHECK(parseBrushResultRegions(result, "brush").empty());
+}
+
 } // namespace
 
 int main() {
@@ -510,6 +576,10 @@ int main() {
     test_rleRoundTrip_runLengthBoundary_8vs9();
     test_rleRoundTrip_runLengthBoundary_256vs257();
     test_rleRoundTrip_runLongerThan65536Chunks();
+    test_buildBrushLabelResult_oneItemPerRegion();
+    test_buildBrushLabelResult_skipsEmptyMask();
+    test_parseBrushResultRegions_roundTripsThroughBuild();
+    test_parseBrushResultRegions_filtersByFromNameAndType();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
