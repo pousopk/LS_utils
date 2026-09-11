@@ -201,6 +201,21 @@ void drawBoxEditorPanel(BoxLabelEditorState& editor) {
     }
 }
 
+void drawChoiceEditorPanel(ChoiceLabelEditorState& editor) {
+    ImGui::Text("Classification");
+    for (const auto& label : editor.availableLabels) {
+        const bool selected = editor.selectedLabel.has_value() && *editor.selectedLabel == label;
+        if (ImGui::RadioButton(label.c_str(), selected)) {
+            editor.selectedLabel = label;
+            editor.dirty = true;
+        }
+    }
+    if (editor.selectedLabel.has_value() && ImGui::SmallButton("Clear selection")) {
+        editor.selectedLabel.reset();
+        editor.dirty = true;
+    }
+}
+
 void drawImageCanvas(LabelingState& state) {
     ImGui::BeginChild("LabelingCanvas", ImVec2(0, 0), true);
     if (state.taskLoadState == LabelingTaskLoadState::Loading) {
@@ -262,6 +277,12 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
         ImGui::BeginChild("LabelingEditorPanel", ImVec2(240.0f, 0), true);
         if (state.boxEditor) {
             drawBoxEditorPanel(*state.boxEditor);
+        }
+        if (state.boxEditor && state.choiceEditor) {
+            ImGui::Separator();
+        }
+        if (state.choiceEditor) {
+            drawChoiceEditorPanel(*state.choiceEditor);
         }
         ImGui::EndChild();
     }
