@@ -2,6 +2,7 @@
 
 #include "manager/label_studio_client.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/labeling_worker.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -48,6 +49,9 @@ struct LabelingState {
     int labelStudioProjectId = 0;
     std::string labelStudioApiToken;
 
+    LabelingWorker worker;
+    std::string scratchFolderPath;   // set once by the window on first open, see Task 8
+
     std::string lastAutoFetchKey;   // (baseUrl, projectId, apiToken), see updateLabelingState
     std::string configStatus;
     LabelStudioProjectConfig projectConfig;
@@ -63,6 +67,8 @@ struct LabelingState {
     int imageWidth = 0;
     int imageHeight = 0;
     GLuint imageTexture = 0;
+    std::string pendingLocalImagePath;   // set by updateLabelingState once FetchTaskDetail's image download completes
+    std::string loadedLocalImagePath;    // the path currently uploaded into imageTexture
     std::optional<int> currentAnnotationId;   // set if the loaded task already had a real annotation
 
     std::optional<BoxLabelEditorState> boxEditor;
@@ -104,3 +110,42 @@ bool anyEditorDirty(const LabelingState& state);
 // combined result is valid (e.g. explicitly labeling an image as having
 // zero objects).
 nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int imageWidth, int imageHeight);
+
+// Called once per main-loop iteration while the Labeling window is open.
+// Lazily (re)fetches state.projectConfig whenever
+// (labelStudioBaseUrl, labelStudioProjectId, labelStudioApiToken) changes
+// (same lastAutoFetchKey convention as Label Assistant/Timestamp Search),
+// calling resetLabelingEditorsFromConfig on a successful fetch. Also polls
+// state.worker for a finished job and applies its result: FetchTaskList
+// fills state.taskList/taskListError; FetchTaskDetail fills the editors
+// (via applyTaskDetailToEditors) and state.imageWidth/imageHeight/
+// imageTexture; SubmitAnnotation clears both editors' dirty flags on
+// success and sets state.submitStatus either way.
+void updateLabelingState(LabelingState& state);
+
+// Requests switching the selected task to `taskId`. If anyEditorDirty(state)
+// is true, opens the unsaved-changes prompt instead of switching
+// immediately (state.unsavedPromptAction = SwitchTask,
+// state.unsavedPromptPendingTaskId = taskId); otherwise starts a
+// FetchTaskDetail job right away.
+void requestSelectLabelingTask(LabelingState& state, int taskId);
+
+// Starts a SubmitAnnotation job from buildCombinedAnnotationResult(state,
+// state.imageWidth, state.imageHeight), passing state.currentAnnotationId
+// through (present -> update, absent -> create). Sets
+// state.submitInProgress = true; updateLabelingState clears it once the
+// job completes.
+void beginSubmitLabelingAnnotation(LabelingState& state);
+
+// Unsaved-changes prompt resolution: Discard closes the prompt and
+// proceeds with whatever action was pending (switch task / close window)
+// without saving.
+void confirmDiscardAndSwitchTask(LabelingState& state);
+
+// Unsaved-changes prompt resolution: Save submits the current edits first
+// (beginSubmitLabelingAnnotation), then proceeds with the pending action
+// once the submit completes. Implemented as: close the prompt, submit now,
+// and let the caller (the window, Task 11) re-issue the pending
+// switch/close after seeing submitInProgress go false -- LabelingState
+// itself doesn't schedule follow-up actions across frames.
+void confirmSaveAndSwitchTask(LabelingState& state);

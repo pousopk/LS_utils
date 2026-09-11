@@ -614,19 +614,6 @@ bool fetchAllLabelStudioTasksRaw(
     return true;
 }
 
-LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey) {
-    LabelStudioTaskListResult out;
-    nlohmann::json allTasks;
-    std::string error;
-    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, error)) {
-        out.error = error;
-        return out;
-    }
-    out.tasks = selectAllTaskSummaries(allTasks, dataImageKey);
-    return out;
-}
-
 // Uploads `imagePath`'s bytes as a real multipart file upload to the
 // project's import endpoint, creating a brand-new task. Returns true only
 // on a 2xx response; the caller resolves the resulting task id
@@ -680,42 +667,6 @@ bool uploadImage(
     return ok;
 }
 
-// Downloads the image at `{baseUrl}{imagePath}` (imagePath already
-// absolute, e.g. "/data/upload/11/xxx.png", as found in a task's `data`)
-// with the same token auth as every other call here, writing the raw
-// bytes to `localOutputPath`. Returns false on any failure (network,
-// non-2xx, or the local file couldn't be written), with `error` set.
-bool downloadTaskImage(
-    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
-    const std::string& localOutputPath, std::string& error) {
-    const std::string url = normalizeBaseUrl(baseUrl) + imagePath;
-
-    std::string responseBody;
-    long httpCode = 0;
-    std::string networkError;
-    if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
-        error = networkError;
-        return false;
-    }
-    if (httpCode < 200 || httpCode >= 300) {
-        error = "Label Studio returned HTTP " + std::to_string(httpCode) + " downloading " + imagePath;
-        return false;
-    }
-
-    std::ofstream file(localOutputPath, std::ios::binary);
-    if (!file) {
-        error = "Could not open file for writing: " + localOutputPath;
-        return false;
-    }
-    file.write(responseBody.data(), static_cast<std::streamsize>(responseBody.size()));
-    if (!file) {
-        error = "Failed to write downloaded image to: " + localOutputPath;
-        return false;
-    }
-
-    return true;
-}
-
 bool createLabelStudioPredictionInternal(
     const std::string& baseUrl, const std::string& apiToken, int taskId, const nlohmann::json& resultArray,
     float score) {
@@ -760,6 +711,55 @@ bool createLabelStudioPredictionInternal(
 }
 
 } // namespace
+
+LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey) {
+    LabelStudioTaskListResult out;
+    nlohmann::json allTasks;
+    std::string error;
+    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, error)) {
+        out.error = error;
+        return out;
+    }
+    out.tasks = selectAllTaskSummaries(allTasks, dataImageKey);
+    return out;
+}
+
+// Downloads the image at `{baseUrl}{imagePath}` (imagePath already
+// absolute, e.g. "/data/upload/11/xxx.png", as found in a task's `data`)
+// with the same token auth as every other call here, writing the raw
+// bytes to `localOutputPath`. Returns false on any failure (network,
+// non-2xx, or the local file couldn't be written), with `error` set.
+bool downloadTaskImage(
+    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
+    const std::string& localOutputPath, std::string& error) {
+    const std::string url = normalizeBaseUrl(baseUrl) + imagePath;
+
+    std::string responseBody;
+    long httpCode = 0;
+    std::string networkError;
+    if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+        error = networkError;
+        return false;
+    }
+    if (httpCode < 200 || httpCode >= 300) {
+        error = "Label Studio returned HTTP " + std::to_string(httpCode) + " downloading " + imagePath;
+        return false;
+    }
+
+    std::ofstream file(localOutputPath, std::ios::binary);
+    if (!file) {
+        error = "Could not open file for writing: " + localOutputPath;
+        return false;
+    }
+    file.write(responseBody.data(), static_cast<std::streamsize>(responseBody.size()));
+    if (!file) {
+        error = "Failed to write downloaded image to: " + localOutputPath;
+        return false;
+    }
+
+    return true;
+}
 
 LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
     const std::string& baseUrl, int projectId, const std::string& apiToken,

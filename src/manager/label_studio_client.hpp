@@ -338,6 +338,15 @@ LabelStudioTaskDetail parseLabelStudioTaskDetail(const nlohmann::json& taskJson,
 LabelStudioTaskDetail fetchLabelStudioTaskById(
     const std::string& baseUrl, const std::string& apiToken, int taskId, const std::string& dataImageKey);
 
+// Downloads the image at `{baseUrl}{imagePath}` (imagePath already
+// absolute, e.g. "/data/upload/11/xxx.png", as found in a task's `data`)
+// with the same token auth as every other call here, writing the raw
+// bytes to `localOutputPath`. Returns false on any failure (network,
+// non-2xx, or the local file couldn't be written), with `error` set.
+bool downloadTaskImage(
+    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
+    const std::string& localOutputPath, std::string& error);
+
 struct LabelStudioGroundTruthDataset {
     LabelStudioImportResult groundTruth;   // built by parseLabelStudioExport on the raw task list, unchanged
     int downloaded = 0;
