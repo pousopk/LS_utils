@@ -216,8 +216,8 @@ void drawChoiceEditorPanel(ChoiceLabelEditorState& editor) {
     }
 }
 
-void drawImageCanvas(LabelingState& state) {
-    ImGui::BeginChild("LabelingCanvas", ImVec2(0, 0), true);
+void drawImageCanvas(LabelingState& state, float width) {
+    ImGui::BeginChild("LabelingCanvas", ImVec2(width, 0), true);
     if (state.taskLoadState == LabelingTaskLoadState::Loading) {
         ImGui::TextDisabled("Loading...");
     } else if (state.taskLoadState == LabelingTaskLoadState::Failed) {
@@ -288,10 +288,14 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     ImGui::BeginChild("LabelingBody", ImVec2(0, 0), false);
     drawTaskListPanel(state);
     ImGui::SameLine();
-    drawImageCanvas(state);
-    if (state.boxEditor || state.choiceEditor) {
+    const bool hasEditorPanel = state.boxEditor || state.choiceEditor;
+    const float editorPanelWidth = 240.0f;
+    const float canvasWidth =
+        hasEditorPanel ? ImGui::GetContentRegionAvail().x - editorPanelWidth - ImGui::GetStyle().ItemSpacing.x : 0.0f;
+    drawImageCanvas(state, canvasWidth);
+    if (hasEditorPanel) {
         ImGui::SameLine();
-        ImGui::BeginChild("LabelingEditorPanel", ImVec2(240.0f, 0), true);
+        ImGui::BeginChild("LabelingEditorPanel", ImVec2(editorPanelWidth, 0), true);
         if (state.boxEditor) {
             drawBoxEditorPanel(*state.boxEditor);
         }
