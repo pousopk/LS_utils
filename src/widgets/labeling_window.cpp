@@ -225,8 +225,19 @@ void drawImageCanvas(LabelingState& state, float width) {
     } else if (state.imageTexture != 0) {
         const ImVec2 size = fitImageToRegion(
             state.imageWidth, state.imageHeight, ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
+        const ImVec2 imagePos = ImGui::GetCursorScreenPos();
         ImGui::Image((void*)(intptr_t)state.imageTexture, size);
         if (state.boxEditor) {
+            // A plain Image() item doesn't capture the mouse the way an
+            // active widget does, so a click-drag on it can fall through
+            // to the window's own drag/focus handling instead of our own
+            // drag logic below. Overlaying an invisible button (same
+            // position/size as the image) makes ImGui treat the drag as
+            // captured by this widget for its whole duration -- the
+            // standard fix for "dragging on my custom canvas moves the
+            // window instead."
+            ImGui::SetCursorScreenPos(imagePos);
+            ImGui::InvisibleButton("LabelingCanvasHitRegion", size);
             drawBoxOverlay(*state.boxEditor, state.imageWidth, state.imageHeight);
             handleBoxDrag(*state.boxEditor, state.imageWidth, state.imageHeight);
         }
