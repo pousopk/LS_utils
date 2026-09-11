@@ -27,6 +27,38 @@ cv::Mat maskFromRows(const std::vector<std::vector<int>>& rows) {
     return mask;
 }
 
+void test_compositeMaskOverlay_blendsOnlyMaskedPixels() {
+    cv::Mat base(2, 2, CV_8UC3, cv::Scalar(0, 0, 0)); // solid black, BGR
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region;
+    region.mask = maskFromRows({{255, 0}, {0, 0}}); // only pixel (0,0) painted
+    region.className = "Defect";
+    regions.push_back(region);
+
+    const cv::Mat result = compositeMaskOverlay(base, regions);
+    CHECK(result.rows == 2);
+    CHECK(result.cols == 2);
+    // The painted pixel must differ from the original black.
+    const cv::Vec3b paintedPixel = result.at<cv::Vec3b>(0, 0);
+    CHECK(paintedPixel != cv::Vec3b(0, 0, 0));
+    // An unpainted pixel must stay exactly the original color.
+    const cv::Vec3b untouchedPixel = result.at<cv::Vec3b>(1, 1);
+    CHECK(untouchedPixel == cv::Vec3b(0, 0, 0));
+}
+
+void test_compositeMaskOverlay_skipsRegionWithMismatchedSize() {
+    cv::Mat base(4, 4, CV_8UC3, cv::Scalar(10, 20, 30));
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region;
+    region.mask = maskFromRows({{255, 255}, {255, 255}}); // 2x2, doesn't match 4x4 base
+    region.className = "Defect";
+    regions.push_back(region);
+
+    const cv::Mat result = compositeMaskOverlay(base, regions);
+    // Mismatched-size region is skipped entirely -- output equals input.
+    CHECK(result.at<cv::Vec3b>(0, 0) == cv::Vec3b(10, 20, 30));
+}
+
 void test_colorForClassName_isDeterministic() {
     const auto a = colorForClassName("Person");
     const auto b = colorForClassName("Person");
@@ -267,6 +299,8 @@ void test_buildCombinedAnnotationResult_choiceOnlyWhenNoSelection() {
 } // namespace
 
 int main() {
+    test_compositeMaskOverlay_blendsOnlyMaskedPixels();
+    test_compositeMaskOverlay_skipsRegionWithMismatchedSize();
     test_colorForClassName_isDeterministic();
     test_colorForClassName_differentNamesLikelyDiffer();
     test_colorForClassName_emptyStringDoesNotCrash();

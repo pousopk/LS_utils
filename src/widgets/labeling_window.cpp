@@ -6,6 +6,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -345,6 +346,72 @@ void drawChoiceEditorPanel(ChoiceLabelEditorState& editor) {
     if (editor.selectedLabel.has_value() && ImGui::SmallButton("Clear selection")) {
         editor.selectedLabel.reset();
         editor.dirty = true;
+    }
+}
+
+struct MaskPaintDragState {
+    bool active = false;
+    int lastX = -1;
+    int lastY = -1;
+};
+
+// Paints/erases into the currently selected mask region as the mouse
+// drags over the canvas -- analogous to handleBoxDrag, but there's
+// nothing to "select" on the image itself (mask regions are selected via
+// the region list in the editor panel, see Task 7); this only paints.
+// Sets `maskChanged` to true whenever a stroke actually modifies pixels,
+// so the caller knows to recomposite and re-upload the display texture.
+void handleMaskPaint(BrushLabelEditorState& editor, int imageWidth, int imageHeight, bool& maskChanged) {
+    if (imageWidth <= 0 || imageHeight <= 0) {
+        return;
+    }
+    const ImVec2 imageMin = ImGui::GetItemRectMin();
+    const ImVec2 imageMax = ImGui::GetItemRectMax();
+    const float imageW = imageMax.x - imageMin.x;
+    const float imageH = imageMax.y - imageMin.y;
+    if (imageW <= 1.0f || imageH <= 1.0f) {
+        return;
+    }
+
+    auto mapMouseToImage = [&](const ImVec2& mouse, int& outX, int& outY) {
+        const float u = std::clamp((mouse.x - imageMin.x) / imageW, 0.0f, 1.0f);
+        const float v = std::clamp((mouse.y - imageMin.y) / imageH, 0.0f, 1.0f);
+        outX = std::clamp(static_cast<int>(u * static_cast<float>(imageWidth)), 0, imageWidth - 1);
+        outY = std::clamp(static_cast<int>(v * static_cast<float>(imageHeight)), 0, imageHeight - 1);
+    };
+
+    static MaskPaintDragState drag;
+    const bool hovered = ImGui::IsItemHovered();
+    const bool hasSelection =
+        editor.selectedRegionIndex >= 0 && editor.selectedRegionIndex < static_cast<int>(editor.regions.size());
+
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hasSelection) {
+        drag.active = true;
+        drag.lastX = -1;
+        drag.lastY = -1;
+    }
+
+    if (drag.active && hasSelection) {
+        int currentX = 0;
+        int currentY = 0;
+        mapMouseToImage(ImGui::GetMousePos(), currentX, currentY);
+
+        cv::Mat& mask = editor.regions[editor.selectedRegionIndex].mask;
+        const cv::Scalar paintValue = editor.eraseMode ? cv::Scalar(0) : cv::Scalar(255);
+        const int radius = std::max(1, static_cast<int>(editor.brushRadius));
+
+        if (drag.lastX >= 0) {
+            cv::line(mask, cv::Point(drag.lastX, drag.lastY), cv::Point(currentX, currentY), paintValue, radius * 2);
+        }
+        cv::circle(mask, cv::Point(currentX, currentY), radius, paintValue, -1);
+        drag.lastX = currentX;
+        drag.lastY = currentY;
+        editor.dirty = true;
+        maskChanged = true;
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            drag.active = false;
+        }
     }
 }
 

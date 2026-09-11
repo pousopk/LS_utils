@@ -6,6 +6,8 @@
 
 #include <GLFW/glfw3.h>
 
+#include <opencv2/imgproc.hpp>
+
 #include <optional>
 #include <string>
 #include <vector>
@@ -105,6 +107,10 @@ struct LabelingState {
     GLuint imageTexture = 0;
     std::string pendingLocalImagePath;   // set by updateLabelingState once FetchTaskDetail's image download completes
     std::string loadedLocalImagePath;    // the path currently uploaded into imageTexture
+    cv::Mat baseImage;                    // the currently loaded task's raw image (3-channel BGR), kept so mask
+                                          // edits can be recomposited without re-reading the file from disk
+    bool maskNeedsRecomposite = false;   // set by mask paint/new/delete; drawLabelingWindow recomposites+reuploads
+                                          // once per frame when true, then clears it
     std::optional<int> currentAnnotationId;   // set if the loaded task already had a real annotation
 
     std::optional<BoxLabelEditorState> boxEditor;
@@ -147,6 +153,16 @@ bool anyEditorDirty(const LabelingState& state);
 // combined result is valid (e.g. explicitly labeling an image as having
 // zero objects).
 nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int imageWidth, int imageHeight);
+
+// Blends each region's mask onto a copy of `baseImage` (expected 3-channel
+// BGR, matching cv::imread's default), tinted by colorForClassName, at a
+// fixed alpha -- for visual display only, never written back to
+// annotation data. Regions with an empty mask, or one whose size doesn't
+// match baseImage's, are skipped (not an error -- a freshly-created
+// region's mask matches the image by construction; a mismatch here would
+// only happen from a bug elsewhere, and silently skipping is safer than
+// crashing the display). Pure pixel manipulation, no GL/ImGui.
+cv::Mat compositeMaskOverlay(const cv::Mat& baseImage, const std::vector<DraftBrushRegion>& regions);
 
 // Called once per main-loop iteration while the Labeling window is open.
 // Lazily (re)fetches state.projectConfig whenever
