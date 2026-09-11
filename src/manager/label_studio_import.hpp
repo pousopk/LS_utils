@@ -4,6 +4,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,3 +77,25 @@ PredictionResultAndScore buildClassificationPredictionResult(
 // for a single detection draft. Pure.
 PredictionResultAndScore buildDetectionPredictionResult(
     const DraftDetectionLabel& draft, const std::string& rectangleLabelsFromName, const std::string& imageToName);
+
+// Pure function: the inverse of buildDetectionPredictionResult -- extracts
+// every "rectanglelabels" result item whose from_name matches
+// `rectangleLabelsFromName` back into pixel-space boxes (using each
+// item's own original_width/original_height, converting its x/y/width/
+// height percentages back to pixels the same way parseLabelStudioExport
+// does). Items with a nonzero rotation are skipped (same as
+// parseLabelStudioExport -- this app doesn't support rotated boxes).
+// confidence is not meaningful for a real annotation's box and is left at
+// its default (0.0f). Used to seed the box editor from an existing
+// annotation or prediction.
+std::vector<DraftDetectionBox> parseDetectionResultBoxes(
+    const nlohmann::json& resultArray, const std::string& rectangleLabelsFromName);
+
+// Pure function: the inverse of buildClassificationPredictionResult --
+// returns the first "choices" result item's first choice value whose
+// from_name matches `choicesFromName`, or std::nullopt if no such item
+// exists. This app's classification editor is single-select for phase 1,
+// so only the first choice is used even if a result item somehow has
+// more than one.
+std::optional<std::string> parseChoiceResultLabel(
+    const nlohmann::json& resultArray, const std::string& choicesFromName);

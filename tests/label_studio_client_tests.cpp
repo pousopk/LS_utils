@@ -290,6 +290,59 @@ void test_parseLabelStudioTaskDetail_missingImageKeyIsError() {
     CHECK(!detail.error.empty());
 }
 
+void test_parseDetectionResultBoxes_convertsPercentToPixels() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "label", "to_name": "image",
+         "original_width": 200, "original_height": 100,
+         "value": {"x": 10.0, "y": 20.0, "width": 50.0, "height": 25.0, "rectanglelabels": ["Person"]}}
+    ])");
+
+    const auto boxes = parseDetectionResultBoxes(result, "label");
+    CHECK(boxes.size() == 1);
+    CHECK(boxes[0].box.x == 20);      // 10% of 200
+    CHECK(boxes[0].box.y == 20);      // 20% of 100
+    CHECK(boxes[0].box.width == 100); // 50% of 200
+    CHECK(boxes[0].box.height == 25); // 25% of 100
+    CHECK(boxes[0].className == "Person");
+}
+
+void test_parseDetectionResultBoxes_filtersByFromNameAndType() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "otherLabel", "to_name": "image",
+         "original_width": 100, "original_height": 100,
+         "value": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "rectanglelabels": ["Car"]}},
+        {"type": "choices", "from_name": "label", "to_name": "image", "value": {"choices": ["Good"]}}
+    ])");
+    CHECK(parseDetectionResultBoxes(result, "label").empty());
+}
+
+void test_parseDetectionResultBoxes_skipsRotatedBox() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "label", "to_name": "image",
+         "original_width": 100, "original_height": 100,
+         "value": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "rotation": 15.0, "rectanglelabels": ["Car"]}}
+    ])");
+    CHECK(parseDetectionResultBoxes(result, "label").empty());
+}
+
+void test_parseChoiceResultLabel_findsMatchingChoice() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "choices", "from_name": "class", "to_name": "image", "value": {"choices": ["Defect"]}}
+    ])");
+    const auto label = parseChoiceResultLabel(result, "class");
+    CHECK(label.has_value());
+    CHECK(*label == "Defect");
+}
+
+void test_parseChoiceResultLabel_noMatchReturnsNullopt() {
+    const auto result = nlohmann::json::parse(R"([{"type": "rectanglelabels", "from_name": "label"}])");
+    CHECK(!parseChoiceResultLabel(result, "class").has_value());
+}
+
+void test_parseChoiceResultLabel_emptyResultReturnsNullopt() {
+    CHECK(!parseChoiceResultLabel(nlohmann::json::array(), "class").has_value());
+}
+
 } // namespace
 
 int main() {
@@ -315,6 +368,12 @@ int main() {
     test_parseLabelStudioTaskDetail_withAnnotationAndPrediction();
     test_parseLabelStudioTaskDetail_noAnnotationOrPrediction();
     test_parseLabelStudioTaskDetail_missingImageKeyIsError();
+    test_parseDetectionResultBoxes_convertsPercentToPixels();
+    test_parseDetectionResultBoxes_filtersByFromNameAndType();
+    test_parseDetectionResultBoxes_skipsRotatedBox();
+    test_parseChoiceResultLabel_findsMatchingChoice();
+    test_parseChoiceResultLabel_noMatchReturnsNullopt();
+    test_parseChoiceResultLabel_emptyResultReturnsNullopt();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

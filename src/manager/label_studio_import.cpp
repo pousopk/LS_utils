@@ -184,3 +184,65 @@ PredictionResultAndScore buildDetectionPredictionResult(
     return out;
 }
 
+std::vector<DraftDetectionBox> parseDetectionResultBoxes(
+    const nlohmann::json& resultArray, const std::string& rectangleLabelsFromName) {
+    std::vector<DraftDetectionBox> boxes;
+    if (!resultArray.is_array()) {
+        return boxes;
+    }
+
+    for (const auto& item : resultArray) {
+        if (!item.contains("type") || item["type"] != "rectanglelabels") {
+            continue;
+        }
+        if (!item.contains("from_name") || item["from_name"] != rectangleLabelsFromName) {
+            continue;
+        }
+        if (!item.contains("value") || !item.contains("original_width") || !item.contains("original_height")) {
+            continue;
+        }
+        const auto& value = item["value"];
+        if (value.contains("rotation") && value["rotation"].get<double>() != 0.0) {
+            continue;
+        }
+        if (!value.contains("rectanglelabels") || !value["rectanglelabels"].is_array() || value["rectanglelabels"].empty()) {
+            continue;
+        }
+
+        const double originalWidth = item["original_width"].get<double>();
+        const double originalHeight = item["original_height"].get<double>();
+
+        DraftDetectionBox box;
+        box.box = cv::Rect(
+            static_cast<int>(std::round(value["x"].get<double>() / 100.0 * originalWidth)),
+            static_cast<int>(std::round(value["y"].get<double>() / 100.0 * originalHeight)),
+            static_cast<int>(std::round(value["width"].get<double>() / 100.0 * originalWidth)),
+            static_cast<int>(std::round(value["height"].get<double>() / 100.0 * originalHeight)));
+        box.className = value["rectanglelabels"][0].get<std::string>();
+        boxes.push_back(std::move(box));
+    }
+
+    return boxes;
+}
+
+std::optional<std::string> parseChoiceResultLabel(
+    const nlohmann::json& resultArray, const std::string& choicesFromName) {
+    if (!resultArray.is_array()) {
+        return std::nullopt;
+    }
+    for (const auto& item : resultArray) {
+        if (!item.contains("type") || item["type"] != "choices") {
+            continue;
+        }
+        if (!item.contains("from_name") || item["from_name"] != choicesFromName) {
+            continue;
+        }
+        if (!item.contains("value") || !item["value"].contains("choices") || !item["value"]["choices"].is_array()
+            || item["value"]["choices"].empty()) {
+            continue;
+        }
+        return item["value"]["choices"][0].get<std::string>();
+    }
+    return std::nullopt;
+}
+
