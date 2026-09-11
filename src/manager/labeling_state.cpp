@@ -46,6 +46,7 @@ LabelColor colorForClassName(const std::string& className) {
 void resetLabelingEditorsFromConfig(LabelingState& state) {
     state.boxEditor.reset();
     state.choiceEditor.reset();
+    state.maskEditor.reset();
 
     for (const auto& tag : state.projectConfig.controlTags) {
         if (tag.type == LabelStudioControlTagType::RectangleLabels) {
@@ -63,8 +64,16 @@ void resetLabelingEditorsFromConfig(LabelingState& state) {
             editor.toName = tag.toName;
             editor.availableLabels = tag.labels;
             state.choiceEditor = std::move(editor);
+        } else if (tag.type == LabelStudioControlTagType::BrushLabels) {
+            BrushLabelEditorState editor;
+            editor.fromName = tag.name;
+            editor.toName = tag.toName;
+            editor.availableLabels = tag.labels;
+            if (!tag.labels.empty()) {
+                editor.pendingNewMaskLabel = tag.labels.front();
+            }
+            state.maskEditor = std::move(editor);
         }
-        // BrushLabels: not handled until phase 3.
     }
 }
 
@@ -82,6 +91,11 @@ void applyTaskDetailToEditors(LabelingState& state, const LabelStudioTaskDetail&
         state.choiceEditor->selectedLabel = parseChoiceResultLabel(sourceResult, state.choiceEditor->fromName);
         state.choiceEditor->dirty = false;
     }
+    if (state.maskEditor) {
+        state.maskEditor->regions = parseBrushResultRegions(sourceResult, state.maskEditor->fromName);
+        state.maskEditor->selectedRegionIndex = -1;
+        state.maskEditor->dirty = false;
+    }
 }
 
 bool anyEditorDirty(const LabelingState& state) {
@@ -89,6 +103,9 @@ bool anyEditorDirty(const LabelingState& state) {
         return true;
     }
     if (state.choiceEditor && state.choiceEditor->dirty) {
+        return true;
+    }
+    if (state.maskEditor && state.maskEditor->dirty) {
         return true;
     }
     return false;
@@ -114,6 +131,14 @@ nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int ima
         const auto choiceResult =
             buildClassificationPredictionResult(draft, state.choiceEditor->fromName, state.choiceEditor->toName);
         for (const auto& item : choiceResult.result) {
+            combined.push_back(item);
+        }
+    }
+
+    if (state.maskEditor && !state.maskEditor->regions.empty()) {
+        const auto maskResult = buildBrushLabelResult(
+            state.maskEditor->regions, state.maskEditor->fromName, state.maskEditor->toName, imageWidth, imageHeight);
+        for (const auto& item : maskResult) {
             combined.push_back(item);
         }
     }

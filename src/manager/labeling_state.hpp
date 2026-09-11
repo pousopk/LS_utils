@@ -46,6 +46,23 @@ struct ChoiceLabelEditorState {
     bool dirty = false;
 };
 
+struct BrushLabelEditorState {
+    std::string fromName;
+    std::string toName;
+    std::vector<std::string> availableLabels;
+    std::vector<DraftBrushRegion> regions;
+    int selectedRegionIndex = -1;   // -1 = none selected
+    bool dirty = false;
+
+    // Class assigned to the next mask started from scratch, chosen via
+    // the shared label picker buttons. Defaults to the first available
+    // label (see resetLabelingEditorsFromConfig).
+    std::string pendingNewMaskLabel;
+
+    bool eraseMode = false;
+    float brushRadius = 12.0f;
+};
+
 enum class LabelingTaskLoadState {
     NotLoaded,
     Loading,
@@ -92,6 +109,7 @@ struct LabelingState {
 
     std::optional<BoxLabelEditorState> boxEditor;
     std::optional<ChoiceLabelEditorState> choiceEditor;
+    std::optional<BrushLabelEditorState> maskEditor;
 
     bool submitInProgress = false;
     std::string submitStatus;
