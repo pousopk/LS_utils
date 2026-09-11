@@ -199,6 +199,23 @@ void test_buildCombinedAnnotationResult_includesMaskRegions() {
     CHECK(result[0]["type"] == "brushlabels");
 }
 
+void test_confirmDiscardAndSwitchTask_clearsMaskEditorDirty() {
+    // Regression test: adding maskEditor's dirty-clearing to
+    // confirmDiscardAndSwitchTask (and to updateLabelingState's
+    // SubmitAnnotation success handling) was missed when the mask editor
+    // was introduced, so the unsaved-changes prompt kept reappearing even
+    // after a successful Submit/Discard.
+    LabelingState state;
+    state.maskEditor = BrushLabelEditorState{};
+    state.maskEditor->dirty = true;
+    state.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
+
+    confirmDiscardAndSwitchTask(state);
+
+    CHECK(!state.maskEditor->dirty);
+    CHECK(!anyEditorDirty(state));
+}
+
 void test_applyTaskDetailToEditors_seedsFromExistingAnnotation() {
     LabelingState state;
     state.projectConfig.controlTags = {
@@ -313,6 +330,7 @@ int main() {
     test_applyTaskDetailToEditors_seedsMaskRegionsFromExistingAnnotation();
     test_anyEditorDirty_trueWhenMaskEditorDirty();
     test_buildCombinedAnnotationResult_includesMaskRegions();
+    test_confirmDiscardAndSwitchTask_clearsMaskEditorDirty();
     test_applyTaskDetailToEditors_seedsFromExistingAnnotation();
     test_applyTaskDetailToEditors_fallsBackToPredictionWhenNoAnnotation();
     test_applyTaskDetailToEditors_blankWhenNeitherPresent();

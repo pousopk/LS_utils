@@ -198,6 +198,9 @@ void updateLabelingState(LabelingState& state) {
                 if (state.choiceEditor) {
                     state.choiceEditor->dirty = false;
                 }
+                if (state.maskEditor) {
+                    state.maskEditor->dirty = false;
+                }
             } else {
                 state.submitStatus = "Save failed: " + result.submitError;
             }
@@ -253,6 +256,9 @@ void confirmDiscardAndSwitchTask(LabelingState& state) {
     }
     if (state.choiceEditor) {
         state.choiceEditor->dirty = false;
+    }
+    if (state.maskEditor) {
+        state.maskEditor->dirty = false;
     }
 
     if (pendingAction == LabelingUnsavedPromptAction::SwitchTask) {
