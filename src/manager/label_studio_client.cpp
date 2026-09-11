@@ -209,6 +209,7 @@ LabelStudioProjectConfig parseLabelStudioProjectConfigXml(const std::string& lab
     };
     collectTags("RectangleLabels", "Label", LabelStudioControlTagType::RectangleLabels);
     collectTags("Choices", "Choice", LabelStudioControlTagType::Choices);
+    collectTags("BrushLabels", "Label", LabelStudioControlTagType::BrushLabels);
 
     return config;
 }

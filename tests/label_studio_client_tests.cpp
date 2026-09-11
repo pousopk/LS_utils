@@ -221,6 +221,19 @@ void test_parseLabelStudioProjectConfigXml_malformedXmlIsError() {
     CHECK(!config.error.empty());
 }
 
+void test_parseLabelStudioProjectConfigXml_brushLabelsTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<BrushLabels name="brush" toName="image">)"
+        R"(<Label value="Defect"/><Label value="Scratch"/></BrushLabels></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::BrushLabels);
+    CHECK(config.controlTags[0].labels.size() == 2);
+}
+
 void test_selectAllTaskSummaries_flagsAnnotationsAndPredictions() {
     const auto tasks = nlohmann::json::parse(R"([
         {"id": 1, "data": {"image": "/a/1.jpg"}, "total_annotations": 1, "total_predictions": 0},
@@ -553,6 +566,7 @@ int main() {
     test_parseLabelStudioProjectConfigXml_bothTagsPresent();
     test_parseLabelStudioProjectConfigXml_noImageTagIsError();
     test_parseLabelStudioProjectConfigXml_malformedXmlIsError();
+    test_parseLabelStudioProjectConfigXml_brushLabelsTag();
     test_selectAllTaskSummaries_flagsAnnotationsAndPredictions();
     test_selectAllTaskSummaries_fallsBackToArrayLengths();
     test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey();
