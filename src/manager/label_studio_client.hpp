@@ -364,3 +364,23 @@ LabelStudioGroundTruthDataset fetchAndDownloadLabeledDataset(
     const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
     const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress = nullptr,
     const std::atomic<bool>* cancelRequested = nullptr);
+
+struct LabelStudioAnnotationWriteResult {
+    bool success = false;
+    std::string error;   // set only when success is false
+};
+
+// Creates a brand-new annotation on `taskId` via POST
+// {baseUrl}/api/tasks/{taskId}/annotations/, with `resultArray` as its
+// `result` field. Used the first time a task is labeled in-app (no
+// existing annotation to update).
+LabelStudioAnnotationWriteResult createLabelStudioAnnotation(
+    const std::string& baseUrl, const std::string& apiToken, int taskId, const nlohmann::json& resultArray);
+
+// Updates an already-existing annotation via PATCH
+// {baseUrl}/api/annotations/{annotationId}/ (Label Studio's annotation
+// update endpoint is keyed by the annotation's own id, not the task's).
+// Used when the task being labeled already had an annotation (loaded via
+// fetchLabelStudioTaskById's `annotationId`).
+LabelStudioAnnotationWriteResult updateLabelStudioAnnotation(
+    const std::string& baseUrl, const std::string& apiToken, int annotationId, const nlohmann::json& resultArray);

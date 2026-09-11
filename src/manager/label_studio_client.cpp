@@ -960,3 +960,66 @@ LabelStudioGroundTruthDataset fetchAndDownloadLabeledDataset(
 
     return result;
 }
+
+namespace {
+
+LabelStudioAnnotationWriteResult performAnnotationWrite(
+    const std::string& url, const std::string& apiToken, const char* httpMethod, const nlohmann::json& resultArray) {
+    LabelStudioAnnotationWriteResult out;
+
+    CURL* curl = curl_easy_init();
+    if (curl == nullptr) {
+        out.error = "Failed to initialize HTTP client";
+        return out;
+    }
+
+    nlohmann::json body;
+    body["result"] = resultArray;
+    const std::string bodyStr = body.dump();
+
+    const std::string authHeader = "Authorization: Token " + apiToken;
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, authHeader.c_str());
+
+    std::string responseBody;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, httpMethod);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, bodyStr.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(bodyStr.size()));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    const CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        out.error = std::string("Request failed: ") + curl_easy_strerror(res);
+    } else {
+        long httpCode = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+        if (httpCode >= 200 && httpCode < 300) {
+            out.success = true;
+        } else {
+            out.error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
+        }
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return out;
+}
+
+} // namespace
+
+LabelStudioAnnotationWriteResult createLabelStudioAnnotation(
+    const std::string& baseUrl, const std::string& apiToken, int taskId, const nlohmann::json& resultArray) {
+    const std::string url = normalizeBaseUrl(baseUrl) + "/api/tasks/" + std::to_string(taskId) + "/annotations/";
+    return performAnnotationWrite(url, apiToken, "POST", resultArray);
+}
+
+LabelStudioAnnotationWriteResult updateLabelStudioAnnotation(
+    const std::string& baseUrl, const std::string& apiToken, int annotationId, const nlohmann::json& resultArray) {
+    const std::string url = normalizeBaseUrl(baseUrl) + "/api/annotations/" + std::to_string(annotationId) + "/";
+    return performAnnotationWrite(url, apiToken, "PATCH", resultArray);
+}
