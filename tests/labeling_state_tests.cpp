@@ -15,6 +15,35 @@ void check(bool condition, const char* expr, const char* file, int line) {
 
 namespace {
 
+void test_colorForClassName_isDeterministic() {
+    const auto a = colorForClassName("Person");
+    const auto b = colorForClassName("Person");
+    CHECK(a.r == b.r);
+    CHECK(a.g == b.g);
+    CHECK(a.b == b.b);
+}
+
+void test_colorForClassName_differentNamesLikelyDiffer() {
+    const auto person = colorForClassName("Person");
+    const auto car = colorForClassName("Car");
+    CHECK(person.r != car.r || person.g != car.g || person.b != car.b);
+}
+
+void test_colorForClassName_emptyStringDoesNotCrash() {
+    const auto color = colorForClassName("");
+    (void)color;
+}
+
+void test_resetLabelingEditorsFromConfig_setsDefaultPendingNewBoxLabel() {
+    LabelingState state;
+    state.projectConfig.controlTags = {
+        LabelStudioControlTag{LabelStudioControlTagType::RectangleLabels, "label", "image", {"Person", "Car"}}};
+
+    resetLabelingEditorsFromConfig(state);
+
+    CHECK(state.boxEditor->pendingNewBoxLabel == "Person");
+}
+
 void test_resetLabelingEditorsFromConfig_boxOnly() {
     LabelingState state;
     state.projectConfig.controlTags = {
@@ -153,6 +182,10 @@ void test_buildCombinedAnnotationResult_choiceOnlyWhenNoSelection() {
 } // namespace
 
 int main() {
+    test_colorForClassName_isDeterministic();
+    test_colorForClassName_differentNamesLikelyDiffer();
+    test_colorForClassName_emptyStringDoesNotCrash();
+    test_resetLabelingEditorsFromConfig_setsDefaultPendingNewBoxLabel();
     test_resetLabelingEditorsFromConfig_boxOnly();
     test_resetLabelingEditorsFromConfig_choiceOnly();
     test_resetLabelingEditorsFromConfig_bothTags();

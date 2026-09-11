@@ -66,13 +66,45 @@ void drawTaskListPanel(LabelingState& state) {
     ImGui::EndChild();
 }
 
+constexpr float kHandleScreenRadius = 7.0f;   // hit-test + draw radius, in screen pixels
+
+// Corner handle order: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right.
+constexpr int kHandleCount = 4;
+
+ImVec2 handleScreenPos(int handleIndex, const ImVec2& r0, const ImVec2& r1) {
+    switch (handleIndex) {
+        case 0: return ImVec2(r0.x, r0.y);
+        case 1: return ImVec2(r1.x, r0.y);
+        case 2: return ImVec2(r0.x, r1.y);
+        default: return ImVec2(r1.x, r1.y);
+    }
+}
+
+// The box corner that stays fixed while `handleIndex` is dragged (the
+// corner diagonally opposite it).
+cv::Point handleAnchorPoint(int handleIndex, const cv::Rect& box) {
+    switch (handleIndex) {
+        case 0: return cv::Point(box.x + box.width, box.y + box.height);
+        case 1: return cv::Point(box.x, box.y + box.height);
+        case 2: return cv::Point(box.x + box.width, box.y);
+        default: return cv::Point(box.x, box.y);
+    }
+}
+
+ImU32 toImU32(const LabelColor& color) {
+    return IM_COL32(color.r, color.g, color.b, 255);
+}
+
 struct BoxDragState {
     bool active = false;
     bool creatingNew = false;
+    int resizeHandle = -1;   // -1 = not resizing; else 0-3, see handleScreenPos/handleAnchorPoint
     int startX = 0;
     int startY = 0;
     int offsetX = 0;
     int offsetY = 0;
+    int anchorX = 0;
+    int anchorY = 0;
 };
 
 void drawBoxOverlay(const BoxLabelEditorState& editor, int imageWidth, int imageHeight) {
@@ -93,9 +125,18 @@ void drawBoxOverlay(const BoxLabelEditorState& editor, int imageWidth, int image
         const auto& box = editor.boxes[i].box;
         const ImVec2 r0(imageMin.x + sx * box.x, imageMin.y + sy * box.y);
         const ImVec2 r1(imageMin.x + sx * (box.x + box.width), imageMin.y + sy * (box.y + box.height));
-        const ImU32 color = (i == editor.selectedBoxIndex) ? IM_COL32(255, 210, 60, 255) : IM_COL32(80, 200, 255, 255);
-        ImGui::GetWindowDrawList()->AddRect(r0, r1, color, 0.0f, 0, 2.0f);
+        const bool isSelected = i == editor.selectedBoxIndex;
+        const ImU32 color = toImU32(colorForClassName(editor.boxes[i].className));
+        ImGui::GetWindowDrawList()->AddRect(r0, r1, color, 0.0f, 0, isSelected ? 3.0f : 2.0f);
         ImGui::GetWindowDrawList()->AddText(ImVec2(r0.x, r0.y - 14.0f), color, editor.boxes[i].className.c_str());
+
+        if (isSelected) {
+            for (int h = 0; h < kHandleCount; ++h) {
+                const ImVec2 p = handleScreenPos(h, r0, r1);
+                ImGui::GetWindowDrawList()->AddCircleFilled(p, kHandleScreenRadius, IM_COL32(255, 255, 255, 255));
+                ImGui::GetWindowDrawList()->AddCircle(p, kHandleScreenRadius, IM_COL32(30, 30, 30, 255), 0, 2.0f);
+            }
+        }
     }
 }
 
@@ -110,6 +151,8 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
     if (imageW <= 1.0f || imageH <= 1.0f) {
         return;
     }
+    const float sx = imageW / static_cast<float>(imageWidth);
+    const float sy = imageH / static_cast<float>(imageHeight);
 
     auto mapMouseToImage = [&](const ImVec2& mouse, int& outX, int& outY) {
         const float u = std::clamp((mouse.x - imageMin.x) / imageW, 0.0f, 1.0f);
@@ -122,35 +165,64 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
     const bool hovered = ImGui::IsItemHovered();
 
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 mouse = ImGui::GetMousePos();
         int startX = 0;
         int startY = 0;
-        mapMouseToImage(ImGui::GetMousePos(), startX, startY);
+        mapMouseToImage(mouse, startX, startY);
 
-        int hitIndex = -1;
-        for (int i = 0; i < static_cast<int>(editor.boxes.size()); ++i) {
-            if (editor.boxes[i].box.contains(cv::Point(startX, startY))) {
-                hitIndex = i;
-                break;
+        int handleHit = -1;
+        if (editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size())) {
+            const auto& box = editor.boxes[editor.selectedBoxIndex].box;
+            const ImVec2 r0(imageMin.x + sx * box.x, imageMin.y + sy * box.y);
+            const ImVec2 r1(imageMin.x + sx * (box.x + box.width), imageMin.y + sy * (box.y + box.height));
+            for (int h = 0; h < kHandleCount; ++h) {
+                const ImVec2 p = handleScreenPos(h, r0, r1);
+                const float dx = mouse.x - p.x;
+                const float dy = mouse.y - p.y;
+                if ((dx * dx + dy * dy) <= (kHandleScreenRadius * kHandleScreenRadius)) {
+                    handleHit = h;
+                    break;
+                }
             }
         }
 
-        if (hitIndex >= 0) {
-            editor.selectedBoxIndex = hitIndex;
+        if (handleHit >= 0) {
+            const cv::Point anchor = handleAnchorPoint(handleHit, editor.boxes[editor.selectedBoxIndex].box);
             drag.active = true;
             drag.creatingNew = false;
-            drag.offsetX = startX - editor.boxes[hitIndex].box.x;
-            drag.offsetY = startY - editor.boxes[hitIndex].box.y;
-        } else if (!editor.availableLabels.empty()) {
-            DraftDetectionBox newBox;
-            newBox.box = cv::Rect(startX, startY, 1, 1);
-            newBox.className = editor.availableLabels.front();
-            editor.boxes.push_back(newBox);
-            editor.selectedBoxIndex = static_cast<int>(editor.boxes.size()) - 1;
-            editor.dirty = true;
-            drag.active = true;
-            drag.creatingNew = true;
-            drag.startX = startX;
-            drag.startY = startY;
+            drag.resizeHandle = handleHit;
+            drag.anchorX = anchor.x;
+            drag.anchorY = anchor.y;
+        } else {
+            int hitIndex = -1;
+            for (int i = 0; i < static_cast<int>(editor.boxes.size()); ++i) {
+                if (editor.boxes[i].box.contains(cv::Point(startX, startY))) {
+                    hitIndex = i;
+                    break;
+                }
+            }
+
+            if (hitIndex >= 0) {
+                editor.selectedBoxIndex = hitIndex;
+                drag.active = true;
+                drag.creatingNew = false;
+                drag.resizeHandle = -1;
+                drag.offsetX = startX - editor.boxes[hitIndex].box.x;
+                drag.offsetY = startY - editor.boxes[hitIndex].box.y;
+            } else if (!editor.availableLabels.empty()) {
+                DraftDetectionBox newBox;
+                newBox.box = cv::Rect(startX, startY, 1, 1);
+                newBox.className =
+                    !editor.pendingNewBoxLabel.empty() ? editor.pendingNewBoxLabel : editor.availableLabels.front();
+                editor.boxes.push_back(newBox);
+                editor.selectedBoxIndex = static_cast<int>(editor.boxes.size()) - 1;
+                editor.dirty = true;
+                drag.active = true;
+                drag.creatingNew = true;
+                drag.resizeHandle = -1;
+                drag.startX = startX;
+                drag.startY = startY;
+            }
         }
     }
 
@@ -165,6 +237,11 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
             box.y = std::min(drag.startY, currentY);
             box.width = std::abs(currentX - drag.startX) + 1;
             box.height = std::abs(currentY - drag.startY) + 1;
+        } else if (drag.resizeHandle >= 0) {
+            box.x = std::min(drag.anchorX, currentX);
+            box.y = std::min(drag.anchorY, currentY);
+            box.width = std::abs(currentX - drag.anchorX) + 1;
+            box.height = std::abs(currentY - drag.anchorY) + 1;
         } else {
             box.x = std::clamp(currentX - drag.offsetX, 0, imageWidth - box.width);
             box.y = std::clamp(currentY - drag.offsetY, 0, imageHeight - box.height);
@@ -173,24 +250,64 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
 
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             drag.active = false;
+            drag.resizeHandle = -1;
         }
+    }
+}
+
+void handleBoxEditorKeyboardShortcuts(BoxLabelEditorState& editor) {
+    if (ImGui::IsAnyItemActive()) {
+        return; // don't hijack number keys while typing in a text field
+    }
+
+    for (int i = 0; i < static_cast<int>(editor.availableLabels.size()) && i < 9; ++i) {
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1 + i))) {
+            const std::string& label = editor.availableLabels[i];
+            if (editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size())) {
+                editor.boxes[editor.selectedBoxIndex].className = label;
+                editor.dirty = true;
+            } else {
+                editor.pendingNewBoxLabel = label;
+            }
+        }
+    }
+
+    if ((ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))
+        && editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size())) {
+        editor.boxes.erase(editor.boxes.begin() + editor.selectedBoxIndex);
+        editor.selectedBoxIndex = -1;
+        editor.dirty = true;
     }
 }
 
 void drawBoxEditorPanel(BoxLabelEditorState& editor) {
     ImGui::Text("Boxes (%d)", static_cast<int>(editor.boxes.size()));
-    if (editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size())) {
-        auto& selected = editor.boxes[editor.selectedBoxIndex];
-        if (ImGui::BeginCombo("Class", selected.className.c_str())) {
-            for (const auto& label : editor.availableLabels) {
-                const bool isSelected = label == selected.className;
-                if (ImGui::Selectable(label.c_str(), isSelected)) {
-                    selected.className = label;
-                    editor.dirty = true;
-                }
+
+    const bool hasSelection =
+        editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size());
+    ImGui::TextDisabled(hasSelection ? "Pick a label to reassign the selected box:" : "Pick a label for the next box:");
+
+    for (int i = 0; i < static_cast<int>(editor.availableLabels.size()); ++i) {
+        const std::string& label = editor.availableLabels[i];
+        const LabelColor color = colorForClassName(label);
+        const std::string buttonText = std::to_string(i + 1) + ": " + label;
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, 0.65f));
+        ImGui::PushStyleColor(
+            ImGuiCol_ButtonHovered, ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, 1.0f));
+        if (ImGui::Button(buttonText.c_str(), ImVec2(-1, 0))) {
+            if (hasSelection) {
+                editor.boxes[editor.selectedBoxIndex].className = label;
+                editor.dirty = true;
+            } else {
+                editor.pendingNewBoxLabel = label;
             }
-            ImGui::EndCombo();
         }
+        ImGui::PopStyleColor(3);
+    }
+
+    if (hasSelection) {
         if (ImGui::Button("Delete selected box")) {
             editor.boxes.erase(editor.boxes.begin() + editor.selectedBoxIndex);
             editor.selectedBoxIndex = -1;
@@ -199,6 +316,8 @@ void drawBoxEditorPanel(BoxLabelEditorState& editor) {
     } else {
         ImGui::TextDisabled("Click-drag on the image to draw a box; click an existing box to select it.");
     }
+
+    handleBoxEditorKeyboardShortcuts(editor);
 }
 
 void drawChoiceEditorPanel(ChoiceLabelEditorState& editor) {
