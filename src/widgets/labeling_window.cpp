@@ -259,10 +259,24 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
         requestSelectLabelingTask(state, taskId);
     }
 
+    if (!state.submitInProgress && !state.unsavedPromptOpen
+        && state.unsavedPromptAction == LabelingUnsavedPromptAction::CloseWindow && state.submitStatus == "Saved.") {
+        *show = false;
+        state.unsavedPromptAction = LabelingUnsavedPromptAction::None;
+    }
+
     ImGui::SetNextWindowSize(ImVec2(1000.0f, 700.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Labeling", show)) {
+    bool windowOpen = *show;
+    if (!ImGui::Begin("Labeling", &windowOpen)) {
         ImGui::End();
         return;
+    }
+    if (!windowOpen && anyEditorDirty(state)) {
+        *show = true; // veto the close; the prompt below decides what happens next
+        state.unsavedPromptOpen = true;
+        state.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
+    } else if (!windowOpen) {
+        *show = false;
     }
 
     drawConnectionFields(state);
@@ -287,6 +301,47 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
         ImGui::EndChild();
     }
     ImGui::EndChild();
+
+    ImGui::Separator();
+    const bool canSubmit = state.selectedTaskId >= 0 && anyEditorDirty(state) && !state.submitInProgress;
+    ImGui::BeginDisabled(!canSubmit);
+    if (ImGui::Button("Submit")) {
+        beginSubmitLabelingAnnotation(state);
+    }
+    ImGui::EndDisabled();
+    if (!state.submitStatus.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", state.submitStatus.c_str());
+    }
+
+    if (state.unsavedPromptOpen) {
+        ImGui::OpenPopup("Unsaved changes");
+    }
+    if (ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("This task has unsaved edits.");
+        if (ImGui::Button("Save")) {
+            confirmSaveAndSwitchTask(state);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard")) {
+            // confirmDiscardAndSwitchTask clears unsavedPromptAction, so capture
+            // whether this was a pending window-close before calling it.
+            const bool wasClosingWindow = state.unsavedPromptAction == LabelingUnsavedPromptAction::CloseWindow;
+            confirmDiscardAndSwitchTask(state);
+            if (wasClosingWindow) {
+                *show = false;
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            state.unsavedPromptOpen = false;
+            state.unsavedPromptAction = LabelingUnsavedPromptAction::None;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     ImGui::End();
 }
