@@ -182,6 +182,14 @@ void updateLabelingState(LabelingState& state);
 // FetchTaskDetail job right away.
 void requestSelectLabelingTask(LabelingState& state, int taskId);
 
+// Pure function: finds state.selectedTaskId's position in state.taskList
+// and returns the task id `direction` steps away (+1 = next, -1 =
+// previous), or std::nullopt if the list is empty, the current task
+// isn't in it, or stepping would go past either end. Used for keyboard
+// task navigation (Ctrl+Left/Right) -- doesn't itself switch tasks or
+// check for unsaved changes, see requestSelectLabelingTask for that.
+std::optional<int> nextLabelingTaskId(const LabelingState& state, int direction);
+
 // Starts a SubmitAnnotation job from buildCombinedAnnotationResult(state,
 // state.imageWidth, state.imageHeight), passing state.currentAnnotationId
 // through (present -> update, absent -> create). Sets

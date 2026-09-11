@@ -385,6 +385,10 @@ void handleMaskPaint(BrushLabelEditorState& editor, int imageWidth, int imageHei
     const bool hasSelection =
         editor.selectedRegionIndex >= 0 && editor.selectedRegionIndex < static_cast<int>(editor.regions.size());
 
+    if (hovered && ImGui::GetIO().MouseWheel != 0.0f) {
+        editor.brushRadius = std::clamp(editor.brushRadius + ImGui::GetIO().MouseWheel * 2.0f, 2.0f, 60.0f);
+    }
+
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hasSelection) {
         drag.active = true;
         drag.lastX = -1;
@@ -535,6 +539,37 @@ void drawImageCanvas(LabelingState& state, float width, bool& maskChanged) {
     ImGui::EndChild();
 }
 
+// Ctrl+Enter to submit and Ctrl+Left/Right to move between tasks, matching
+// Label Studio's own annotation:submit/image:prev/image:next shortcuts.
+// Gated on !IsAnyItemActive() so these don't fire while typing in the
+// connection fields; the caller additionally gates this on the Labeling
+// window having focus, so these don't hijack the shortcuts globally.
+void handleLabelingWindowKeyboardShortcuts(LabelingState& state) {
+    if (ImGui::IsAnyItemActive()) {
+        return;
+    }
+    if (!ImGui::GetIO().KeyCtrl) {
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+        const bool canSubmit = state.selectedTaskId >= 0 && anyEditorDirty(state) && !state.submitInProgress;
+        if (canSubmit) {
+            beginSubmitLabelingAnnotation(state);
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+        if (const auto nextId = nextLabelingTaskId(state, 1)) {
+            requestSelectLabelingTask(state, *nextId);
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+        if (const auto prevId = nextLabelingTaskId(state, -1)) {
+            requestSelectLabelingTask(state, *prevId);
+        }
+    }
+}
+
 } // namespace
 
 void drawLabelingWindow(bool* show, LabelingState& state) {
@@ -585,6 +620,10 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
         state.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
     } else if (!windowOpen) {
         *show = false;
+    }
+
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+        handleLabelingWindowKeyboardShortcuts(state);
     }
 
     drawConnectionFields(state);

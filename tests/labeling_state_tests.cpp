@@ -216,6 +216,54 @@ void test_confirmDiscardAndSwitchTask_clearsMaskEditorDirty() {
     CHECK(!anyEditorDirty(state));
 }
 
+void test_nextLabelingTaskId_returnsNextTask() {
+    LabelingState state;
+    state.taskList = {
+        LabelStudioTaskSummary{10, "/a/10.jpg", false, false},
+        LabelStudioTaskSummary{20, "/a/20.jpg", false, false},
+        LabelStudioTaskSummary{30, "/a/30.jpg", false, false}};
+    state.selectedTaskId = 20;
+
+    const auto next = nextLabelingTaskId(state, 1);
+    CHECK(next.has_value());
+    CHECK(*next == 30);
+}
+
+void test_nextLabelingTaskId_returnsPreviousTask() {
+    LabelingState state;
+    state.taskList = {
+        LabelStudioTaskSummary{10, "/a/10.jpg", false, false},
+        LabelStudioTaskSummary{20, "/a/20.jpg", false, false},
+        LabelStudioTaskSummary{30, "/a/30.jpg", false, false}};
+    state.selectedTaskId = 20;
+
+    const auto prev = nextLabelingTaskId(state, -1);
+    CHECK(prev.has_value());
+    CHECK(*prev == 10);
+}
+
+void test_nextLabelingTaskId_nulloptPastEitherEnd() {
+    LabelingState state;
+    state.taskList = {
+        LabelStudioTaskSummary{10, "/a/10.jpg", false, false},
+        LabelStudioTaskSummary{20, "/a/20.jpg", false, false}};
+
+    state.selectedTaskId = 20;
+    CHECK(!nextLabelingTaskId(state, 1).has_value());
+
+    state.selectedTaskId = 10;
+    CHECK(!nextLabelingTaskId(state, -1).has_value());
+}
+
+void test_nextLabelingTaskId_nulloptWhenCurrentTaskNotFoundOrListEmpty() {
+    LabelingState state;
+    CHECK(!nextLabelingTaskId(state, 1).has_value()); // empty list
+
+    state.taskList = {LabelStudioTaskSummary{10, "/a/10.jpg", false, false}};
+    state.selectedTaskId = 999; // not in the list
+    CHECK(!nextLabelingTaskId(state, 1).has_value());
+}
+
 void test_applyTaskDetailToEditors_seedsFromExistingAnnotation() {
     LabelingState state;
     state.projectConfig.controlTags = {
@@ -331,6 +379,10 @@ int main() {
     test_anyEditorDirty_trueWhenMaskEditorDirty();
     test_buildCombinedAnnotationResult_includesMaskRegions();
     test_confirmDiscardAndSwitchTask_clearsMaskEditorDirty();
+    test_nextLabelingTaskId_returnsNextTask();
+    test_nextLabelingTaskId_returnsPreviousTask();
+    test_nextLabelingTaskId_nulloptPastEitherEnd();
+    test_nextLabelingTaskId_nulloptWhenCurrentTaskNotFoundOrListEmpty();
     test_applyTaskDetailToEditors_seedsFromExistingAnnotation();
     test_applyTaskDetailToEditors_fallsBackToPredictionWhenNoAnnotation();
     test_applyTaskDetailToEditors_blankWhenNeitherPresent();

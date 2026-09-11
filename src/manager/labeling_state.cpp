@@ -230,6 +230,25 @@ void requestSelectLabelingTask(LabelingState& state, int taskId) {
     state.worker.start(std::move(request));
 }
 
+std::optional<int> nextLabelingTaskId(const LabelingState& state, int direction) {
+    int currentIndex = -1;
+    for (int i = 0; i < static_cast<int>(state.taskList.size()); ++i) {
+        if (state.taskList[i].taskId == state.selectedTaskId) {
+            currentIndex = i;
+            break;
+        }
+    }
+    if (currentIndex < 0) {
+        return std::nullopt;
+    }
+
+    const int targetIndex = currentIndex + direction;
+    if (targetIndex < 0 || targetIndex >= static_cast<int>(state.taskList.size())) {
+        return std::nullopt;
+    }
+    return state.taskList[targetIndex].taskId;
+}
+
 void beginSubmitLabelingAnnotation(LabelingState& state) {
     state.submitInProgress = true;
     state.submitStatus.clear();
