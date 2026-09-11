@@ -343,6 +343,131 @@ void test_parseChoiceResultLabel_emptyResultReturnsNullopt() {
     CHECK(!parseChoiceResultLabel(nlohmann::json::array(), "class").has_value());
 }
 
+cv::Mat maskFromRows(const std::vector<std::vector<int>>& rows) {
+    const int height = static_cast<int>(rows.size());
+    const int width = static_cast<int>(rows[0].size());
+    cv::Mat mask(height, width, CV_8UC1);
+    for (int r = 0; r < height; ++r) {
+        for (int c = 0; c < width; ++c) {
+            mask.at<uint8_t>(r, c) = static_cast<uint8_t>(rows[r][c]);
+        }
+    }
+    return mask;
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2AllZero() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 0}, {0, 0}}));
+    const std::vector<int> expected = {0, 0, 0, 16, 57, 27, 253, 240, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2All255() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{255, 255}, {255, 255}}));
+    const std::vector<int> expected = {0, 0, 0, 16, 57, 27, 253, 255, 240};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x3OnePixel() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 0, 0}, {0, 255, 0}}));
+    const std::vector<int> expected = {0, 0, 0, 24, 57, 27, 253, 240, 8, 255, 227, 0, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x20LongRun() {
+    std::vector<int> row(20, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 80, 57, 27, 254, 79, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x9Run() {
+    std::vector<int> row(9, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 36, 57, 27, 254, 35, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x17Run() {
+    std::vector<int> row(17, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 68, 57, 27, 254, 67, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x6Alternating() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 255, 0, 255, 0, 255}}));
+    const std::vector<int> expected = {0, 0, 0, 24, 57, 27, 252, 96, 17, 255, 198, 1, 31, 252, 96, 17, 255, 128};
+    CHECK(rle == expected);
+}
+
+void test_rleRoundTrip_preserves2DShape() {
+    // 3 rows x 4 cols, distinct per-row pattern -- catches a row/col transposition bug.
+    const auto mask = maskFromRows({{0, 255, 0, 255}, {255, 255, 0, 0}, {0, 0, 0, 255}});
+    const auto rle = encodeMaskToLabelStudioRle(mask);
+    const auto decoded = decodeLabelStudioRleToMask(rle, 4, 3);
+    CHECK(decoded.rows == 3);
+    CHECK(decoded.cols == 4);
+    bool allMatch = true;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            if (decoded.at<uint8_t>(r, c) != mask.at<uint8_t>(r, c)) {
+                allMatch = false;
+            }
+        }
+    }
+    CHECK(allMatch);
+}
+
+void test_rleRoundTrip_runLengthBoundary_8vs9() {
+    std::vector<int> row8(8, 255);
+    std::vector<int> row9(9, 255);
+    const auto mask8 = maskFromRows({row8});
+    const auto mask9 = maskFromRows({row9});
+    const auto decoded8 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(mask8), 8, 1);
+    const auto decoded9 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(mask9), 9, 1);
+    bool match8 = true;
+    for (int c = 0; c < 8; ++c) {
+        if (decoded8.at<uint8_t>(0, c) != 255) match8 = false;
+    }
+    bool match9 = true;
+    for (int c = 0; c < 9; ++c) {
+        if (decoded9.at<uint8_t>(0, c) != 255) match9 = false;
+    }
+    CHECK(match8);
+    CHECK(match9);
+}
+
+void test_rleRoundTrip_runLengthBoundary_256vs257() {
+    std::vector<int> row256(256, 255);
+    std::vector<int> row257(257, 255);
+    const auto decoded256 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(maskFromRows({row256})), 256, 1);
+    const auto decoded257 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(maskFromRows({row257})), 257, 1);
+    bool match256 = true;
+    for (int c = 0; c < 256; ++c) {
+        if (decoded256.at<uint8_t>(0, c) != 255) match256 = false;
+    }
+    bool match257 = true;
+    for (int c = 0; c < 257; ++c) {
+        if (decoded257.at<uint8_t>(0, c) != 255) match257 = false;
+    }
+    CHECK(match256);
+    CHECK(match257);
+}
+
+void test_rleRoundTrip_runLongerThan65536Chunks() {
+    // 70000 identical pixels in one row forces the encoder's chunking path
+    // (runs >65536 are split into multiple 16-bit-length-field runs).
+    std::vector<int> row(70000, 255);
+    const auto mask = maskFromRows({row});
+    const auto rle = encodeMaskToLabelStudioRle(mask);
+    const auto decoded = decodeLabelStudioRleToMask(rle, 70000, 1);
+    bool allMatch = true;
+    for (int c = 0; c < 70000; ++c) {
+        if (decoded.at<uint8_t>(0, c) != 255) allMatch = false;
+    }
+    CHECK(allMatch);
+}
+
 } // namespace
 
 int main() {
@@ -374,6 +499,17 @@ int main() {
     test_parseChoiceResultLabel_findsMatchingChoice();
     test_parseChoiceResultLabel_noMatchReturnsNullopt();
     test_parseChoiceResultLabel_emptyResultReturnsNullopt();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2AllZero();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2All255();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x3OnePixel();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x20LongRun();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x9Run();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x17Run();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x6Alternating();
+    test_rleRoundTrip_preserves2DShape();
+    test_rleRoundTrip_runLengthBoundary_8vs9();
+    test_rleRoundTrip_runLengthBoundary_256vs257();
+    test_rleRoundTrip_runLongerThan65536Chunks();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

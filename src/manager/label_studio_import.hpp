@@ -99,3 +99,39 @@ std::vector<DraftDetectionBox> parseDetectionResultBoxes(
 // more than one.
 std::optional<std::string> parseChoiceResultLabel(
     const nlohmann::json& resultArray, const std::string& choicesFromName);
+
+// Pure function: encodes a binary mask (CV_8UC1, values expected to be 0
+// or 255) into Label Studio's proprietary brush RLE format -- a verbatim
+// port of label-studio-converter's encode_rle/mask2rle (brush.py). Each
+// pixel is repeated 4x (Label Studio's RGBA-shaped layout; this app
+// writes all 4 copies identically) and flattened row-major before
+// encoding. See the phase 3 design doc for the exact bit-packing format
+// and the ground-truth vectors this is tested against.
+std::vector<int> encodeMaskToLabelStudioRle(const cv::Mat& mask);
+
+// Pure function: the inverse -- decodes an RLE byte sequence (each int
+// 0-255, as Label Studio's JSON `rle` field represents it) back into a
+// `height` x `width` CV_8UC1 mask. A verbatim port of
+// label-studio-converter's decode_rle.
+cv::Mat decodeLabelStudioRleToMask(const std::vector<int>& rle, int width, int height);
+
+struct DraftBrushRegion {
+    cv::Mat mask;             // CV_8UC1, values 0 or 255, same dimensions as the image
+    std::string className;
+};
+
+// Builds one "brushlabels" result item per region (skipping any with an
+// empty mask) via encodeMaskToLabelStudioRle -- mirrors
+// buildDetectionPredictionResult's shape, but masks are direct annotation
+// data, not predictions, so there's no confidence/score field.
+nlohmann::json buildBrushLabelResult(
+    const std::vector<DraftBrushRegion>& regions, const std::string& brushLabelsFromName,
+    const std::string& imageToName, int imageWidth, int imageHeight);
+
+// The inverse: decodes every "brushlabels" result item whose from_name
+// matches `brushLabelsFromName` back into DraftBrushRegions, using each
+// item's own original_width/original_height (same per-item convention as
+// parseDetectionResultBoxes). Items missing an "rle" value, or with no
+// brushlabels class name, are skipped.
+std::vector<DraftBrushRegion> parseBrushResultRegions(
+    const nlohmann::json& resultArray, const std::string& brushLabelsFromName);
