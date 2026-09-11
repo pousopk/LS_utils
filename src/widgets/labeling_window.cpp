@@ -415,7 +415,64 @@ void handleMaskPaint(BrushLabelEditorState& editor, int imageWidth, int imageHei
     }
 }
 
-void drawImageCanvas(LabelingState& state, float width) {
+void drawMaskEditorPanel(BrushLabelEditorState& editor, int imageWidth, int imageHeight, bool& maskChanged) {
+    ImGui::Text("Masks (%d)", static_cast<int>(editor.regions.size()));
+
+    for (int i = 0; i < static_cast<int>(editor.regions.size()); ++i) {
+        ImGui::PushID(i);
+        const bool selected = i == editor.selectedRegionIndex;
+        const std::string label = std::to_string(i + 1) + ": " + editor.regions[i].className;
+        if (ImGui::Selectable(label.c_str(), selected)) {
+            editor.selectedRegionIndex = i;
+        }
+        ImGui::PopID();
+    }
+
+    const bool hasSelection =
+        editor.selectedRegionIndex >= 0 && editor.selectedRegionIndex < static_cast<int>(editor.regions.size());
+    ImGui::TextDisabled(hasSelection ? "Pick a label to reassign the selected mask:" : "Pick a label for the next mask:");
+
+    const std::string clicked = drawLabelPickerButtons(editor.availableLabels);
+    if (!clicked.empty()) {
+        if (hasSelection) {
+            editor.regions[editor.selectedRegionIndex].className = clicked;
+            editor.dirty = true;
+        } else {
+            editor.pendingNewMaskLabel = clicked;
+        }
+    }
+
+    if (ImGui::Button("New mask") && imageWidth > 0 && imageHeight > 0) {
+        DraftBrushRegion region;
+        region.className = !editor.pendingNewMaskLabel.empty()
+            ? editor.pendingNewMaskLabel
+            : (!editor.availableLabels.empty() ? editor.availableLabels.front() : std::string());
+        region.mask = cv::Mat::zeros(imageHeight, imageWidth, CV_8UC1);
+        editor.regions.push_back(std::move(region));
+        editor.selectedRegionIndex = static_cast<int>(editor.regions.size()) - 1;
+        editor.dirty = true;
+        maskChanged = true;
+    }
+
+    if (hasSelection) {
+        ImGui::SameLine();
+        if (ImGui::Button("Delete selected mask")) {
+            editor.regions.erase(editor.regions.begin() + editor.selectedRegionIndex);
+            editor.selectedRegionIndex = -1;
+            editor.dirty = true;
+            maskChanged = true;
+        }
+    }
+
+    ImGui::Checkbox("Erase", &editor.eraseMode);
+    ImGui::SliderFloat("Brush size", &editor.brushRadius, 2.0f, 60.0f);
+
+    if (!hasSelection) {
+        ImGui::TextDisabled("Select or create a mask, then paint on the image.");
+    }
+}
+
+void drawImageCanvas(LabelingState& state, float width, bool& maskChanged) {
     ImGui::BeginChild("LabelingCanvas", ImVec2(width, 0), true);
     if (state.taskLoadState == LabelingTaskLoadState::Loading) {
         ImGui::TextDisabled("Loading...");
@@ -426,7 +483,7 @@ void drawImageCanvas(LabelingState& state, float width) {
             state.imageWidth, state.imageHeight, ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
         const ImVec2 imagePos = ImGui::GetCursorScreenPos();
         ImGui::Image((void*)(intptr_t)state.imageTexture, size);
-        if (state.boxEditor) {
+        if (state.boxEditor || state.maskEditor) {
             // A plain Image() item doesn't capture the mouse the way an
             // active widget does, so a click-drag on it can fall through
             // to the window's own drag/focus handling instead of our own
@@ -437,8 +494,13 @@ void drawImageCanvas(LabelingState& state, float width) {
             // window instead."
             ImGui::SetCursorScreenPos(imagePos);
             ImGui::InvisibleButton("LabelingCanvasHitRegion", size);
-            drawBoxOverlay(*state.boxEditor, state.imageWidth, state.imageHeight);
-            handleBoxDrag(*state.boxEditor, state.imageWidth, state.imageHeight);
+            if (state.boxEditor) {
+                drawBoxOverlay(*state.boxEditor, state.imageWidth, state.imageHeight);
+                handleBoxDrag(*state.boxEditor, state.imageWidth, state.imageHeight);
+            }
+            if (state.maskEditor) {
+                handleMaskPaint(*state.maskEditor, state.imageWidth, state.imageHeight, maskChanged);
+            }
         }
     } else {
         ImGui::TextDisabled("Select a task to label.");
@@ -456,12 +518,18 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     updateLabelingState(state);
 
     if (!state.pendingLocalImagePath.empty() && state.pendingLocalImagePath != state.loadedLocalImagePath) {
-        const cv::Mat image = cv::imread(state.pendingLocalImagePath);
+        cv::Mat image = cv::imread(state.pendingLocalImagePath);
         if (!image.empty()) {
+            if (image.channels() == 1) {
+                cv::cvtColor(image, image, cv::COLOR_GRAY2BGR);
+            }
+            state.baseImage = image;
             if (state.imageTexture == 0) {
                 glGenTextures(1, &state.imageTexture);
             }
-            uploadFrameToTexture(state.imageTexture, image, state.imageWidth, state.imageHeight);
+            const cv::Mat display =
+                state.maskEditor ? compositeMaskOverlay(state.baseImage, state.maskEditor->regions) : state.baseImage;
+            uploadFrameToTexture(state.imageTexture, display, state.imageWidth, state.imageHeight);
         }
         state.loadedLocalImagePath = state.pendingLocalImagePath;
     }
@@ -498,26 +566,39 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     ImGui::BeginChild("LabelingBody", ImVec2(0, 0), false);
     drawTaskListPanel(state);
     ImGui::SameLine();
-    const bool hasEditorPanel = state.boxEditor || state.choiceEditor;
+    const bool hasEditorPanel = state.boxEditor || state.choiceEditor || state.maskEditor;
     const float editorPanelWidth = 240.0f;
     const float canvasWidth =
         hasEditorPanel ? ImGui::GetContentRegionAvail().x - editorPanelWidth - ImGui::GetStyle().ItemSpacing.x : 0.0f;
-    drawImageCanvas(state, canvasWidth);
+    bool maskChanged = false;
+    drawImageCanvas(state, canvasWidth, maskChanged);
     if (hasEditorPanel) {
         ImGui::SameLine();
         ImGui::BeginChild("LabelingEditorPanel", ImVec2(editorPanelWidth, 0), true);
         if (state.boxEditor) {
             drawBoxEditorPanel(*state.boxEditor);
         }
-        if (state.boxEditor && state.choiceEditor) {
+        if (state.boxEditor && (state.choiceEditor || state.maskEditor)) {
             ImGui::Separator();
         }
         if (state.choiceEditor) {
             drawChoiceEditorPanel(*state.choiceEditor);
         }
+        if (state.choiceEditor && state.maskEditor) {
+            ImGui::Separator();
+        }
+        if (state.maskEditor) {
+            drawMaskEditorPanel(*state.maskEditor, state.imageWidth, state.imageHeight, maskChanged);
+        }
         ImGui::EndChild();
     }
     ImGui::EndChild();
+
+    if (maskChanged && !state.baseImage.empty()) {
+        const cv::Mat display =
+            state.maskEditor ? compositeMaskOverlay(state.baseImage, state.maskEditor->regions) : state.baseImage;
+        uploadFrameToTexture(state.imageTexture, display, state.imageWidth, state.imageHeight);
+    }
 
     ImGui::Separator();
     const bool canSubmit = state.selectedTaskId >= 0 && anyEditorDirty(state) && !state.submitInProgress;

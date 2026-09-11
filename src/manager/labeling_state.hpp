@@ -107,10 +107,9 @@ struct LabelingState {
     GLuint imageTexture = 0;
     std::string pendingLocalImagePath;   // set by updateLabelingState once FetchTaskDetail's image download completes
     std::string loadedLocalImagePath;    // the path currently uploaded into imageTexture
-    cv::Mat baseImage;                    // the currently loaded task's raw image (3-channel BGR), kept so mask
-                                          // edits can be recomposited without re-reading the file from disk
-    bool maskNeedsRecomposite = false;   // set by mask paint/new/delete; drawLabelingWindow recomposites+reuploads
-                                          // once per frame when true, then clears it
+    cv::Mat baseImage;   // the currently loaded task's raw image (3-channel BGR), kept so mask edits can be
+                         // recomposited without re-reading the file from disk (see drawLabelingWindow's
+                         // maskChanged handling, in the widget layer, for the recomposite-and-reupload trigger)
     std::optional<int> currentAnnotationId;   // set if the loaded task already had a real annotation
 
     std::optional<BoxLabelEditorState> boxEditor;
