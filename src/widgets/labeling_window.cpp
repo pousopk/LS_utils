@@ -248,6 +248,9 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     if (!state.pendingLocalImagePath.empty() && state.pendingLocalImagePath != state.loadedLocalImagePath) {
         const cv::Mat image = cv::imread(state.pendingLocalImagePath);
         if (!image.empty()) {
+            if (state.imageTexture == 0) {
+                glGenTextures(1, &state.imageTexture);
+            }
             uploadFrameToTexture(state.imageTexture, image, state.imageWidth, state.imageHeight);
         }
         state.loadedLocalImagePath = state.pendingLocalImagePath;
