@@ -280,15 +280,14 @@ void handleBoxEditorKeyboardShortcuts(BoxLabelEditorState& editor) {
     }
 }
 
-void drawBoxEditorPanel(BoxLabelEditorState& editor) {
-    ImGui::Text("Boxes (%d)", static_cast<int>(editor.boxes.size()));
-
-    const bool hasSelection =
-        editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size());
-    ImGui::TextDisabled(hasSelection ? "Pick a label to reassign the selected box:" : "Pick a label for the next box:");
-
-    for (int i = 0; i < static_cast<int>(editor.availableLabels.size()); ++i) {
-        const std::string& label = editor.availableLabels[i];
+// Draws one button per label, tinted by colorForClassName and numbered
+// 1..N (matching the number-key shortcuts). Returns the label clicked
+// this frame, or an empty string if none was. Shared by the box editor
+// and the mask editor.
+std::string drawLabelPickerButtons(const std::vector<std::string>& availableLabels) {
+    std::string clicked;
+    for (int i = 0; i < static_cast<int>(availableLabels.size()); ++i) {
+        const std::string& label = availableLabels[i];
         const LabelColor color = colorForClassName(label);
         const std::string buttonText = std::to_string(i + 1) + ": " + label;
 
@@ -297,14 +296,28 @@ void drawBoxEditorPanel(BoxLabelEditorState& editor) {
             ImGuiCol_ButtonHovered, ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, 1.0f));
         if (ImGui::Button(buttonText.c_str(), ImVec2(-1, 0))) {
-            if (hasSelection) {
-                editor.boxes[editor.selectedBoxIndex].className = label;
-                editor.dirty = true;
-            } else {
-                editor.pendingNewBoxLabel = label;
-            }
+            clicked = label;
         }
         ImGui::PopStyleColor(3);
+    }
+    return clicked;
+}
+
+void drawBoxEditorPanel(BoxLabelEditorState& editor) {
+    ImGui::Text("Boxes (%d)", static_cast<int>(editor.boxes.size()));
+
+    const bool hasSelection =
+        editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size());
+    ImGui::TextDisabled(hasSelection ? "Pick a label to reassign the selected box:" : "Pick a label for the next box:");
+
+    const std::string clicked = drawLabelPickerButtons(editor.availableLabels);
+    if (!clicked.empty()) {
+        if (hasSelection) {
+            editor.boxes[editor.selectedBoxIndex].className = clicked;
+            editor.dirty = true;
+        } else {
+            editor.pendingNewBoxLabel = clicked;
+        }
     }
 
     if (hasSelection) {
