@@ -415,6 +415,32 @@ void handleMaskPaint(BrushLabelEditorState& editor, int imageWidth, int imageHei
     }
 }
 
+// Draws an outline circle at the current mouse position, sized to the
+// brush radius, so the user can see how big a stroke will be before
+// clicking -- shown whenever a mask region is selected (painting is only
+// possible then) and the canvas is hovered. Green for paint, red for
+// erase. Purely visual, no state change.
+void drawMaskBrushCursor(const BrushLabelEditorState& editor, int imageWidth, int imageHeight) {
+    const bool hasSelection =
+        editor.selectedRegionIndex >= 0 && editor.selectedRegionIndex < static_cast<int>(editor.regions.size());
+    if (imageWidth <= 0 || imageHeight <= 0 || !hasSelection || !ImGui::IsItemHovered()) {
+        return;
+    }
+
+    const ImVec2 imageMin = ImGui::GetItemRectMin();
+    const ImVec2 imageMax = ImGui::GetItemRectMax();
+    const float imageW = imageMax.x - imageMin.x;
+    if (imageW <= 1.0f) {
+        return;
+    }
+    const float sx = imageW / static_cast<float>(imageWidth);
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const float screenRadius = editor.brushRadius * sx;
+    const ImU32 color = editor.eraseMode ? IM_COL32(255, 80, 80, 220) : IM_COL32(80, 255, 120, 220);
+    ImGui::GetWindowDrawList()->AddCircle(mouse, screenRadius, color, 0, 2.0f);
+}
+
 void drawMaskEditorPanel(BrushLabelEditorState& editor, int imageWidth, int imageHeight, bool& maskChanged) {
     ImGui::Text("Masks (%d)", static_cast<int>(editor.regions.size()));
 
@@ -500,6 +526,7 @@ void drawImageCanvas(LabelingState& state, float width, bool& maskChanged) {
             }
             if (state.maskEditor) {
                 handleMaskPaint(*state.maskEditor, state.imageWidth, state.imageHeight, maskChanged);
+                drawMaskBrushCursor(*state.maskEditor, state.imageWidth, state.imageHeight);
             }
         }
     } else {
