@@ -286,6 +286,58 @@ struct LabelStudioLabeledTask {
 std::vector<LabelStudioLabeledTask> selectLabeledTasks(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
 
+struct LabelStudioTaskSummary {
+    int taskId = 0;
+    std::string imagePath;    // task.data[dataImageKey]
+    bool hasAnnotation = false;
+    bool hasPrediction = false;
+};
+
+// Pure function: parses a Label Studio tasks-list API response (bare array
+// or an object with a "tasks" array) into a summary of every task --
+// unlike selectUnlabeledTasks/selectLabeledTasks, this keeps every task
+// regardless of label state, flagging each one's annotation/prediction
+// presence instead of filtering. Reads total_annotations/total_predictions
+// when present, falling back to the annotations/predictions array lengths
+// otherwise (same convention as selectUnlabeledTasks/selectLabeledTasks).
+// Tasks missing `id`, or missing `data[dataImageKey]` as a string, are
+// skipped.
+std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
+    const nlohmann::json& tasksJson, const std::string& dataImageKey);
+
+struct LabelStudioTaskListResult {
+    std::vector<LabelStudioTaskSummary> tasks;
+    std::string error;   // set only on a hard failure to fetch the task list
+};
+
+// Fetches the project's full task list (the same paged fetch every other
+// flow here uses) and summarizes it via selectAllTaskSummaries.
+LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey);
+
+struct LabelStudioTaskDetail {
+    int taskId = 0;
+    std::string imagePath;                                    // task.data[dataImageKey]
+    std::optional<int> annotationId;                          // set if the task has at least one annotation
+    nlohmann::json annotationResult = nlohmann::json::array(); // annotations[0].result if present, else []
+    nlohmann::json predictionResult = nlohmann::json::array(); // predictions[0].result if present, else []
+    std::string error;                                        // empty on success
+};
+
+// Pure function: extracts one task's id, image path, and (if present) its
+// first annotation's id+result and first prediction's result. This app
+// works with a single annotation per task (see the design doc) -- if a
+// task somehow has more than one, only annotations[0] is used. Returns
+// with `error` set if `id` or `data[dataImageKey]` (as a string) is
+// missing.
+LabelStudioTaskDetail parseLabelStudioTaskDetail(const nlohmann::json& taskJson, const std::string& dataImageKey);
+
+// Fetches a single task via GET {baseUrl}/api/tasks/{taskId}/ (which
+// Label Studio returns with its annotations/predictions arrays embedded)
+// and parses it with parseLabelStudioTaskDetail.
+LabelStudioTaskDetail fetchLabelStudioTaskById(
+    const std::string& baseUrl, const std::string& apiToken, int taskId, const std::string& dataImageKey);
+
 struct LabelStudioGroundTruthDataset {
     LabelStudioImportResult groundTruth;   // built by parseLabelStudioExport on the raw task list, unchanged
     int downloaded = 0;

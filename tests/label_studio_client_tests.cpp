@@ -221,6 +221,75 @@ void test_parseLabelStudioProjectConfigXml_malformedXmlIsError() {
     CHECK(!config.error.empty());
 }
 
+void test_selectAllTaskSummaries_flagsAnnotationsAndPredictions() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a/1.jpg"}, "total_annotations": 1, "total_predictions": 0},
+        {"id": 2, "data": {"image": "/a/2.jpg"}, "total_annotations": 0, "total_predictions": 2},
+        {"id": 3, "data": {"image": "/a/3.jpg"}, "total_annotations": 0, "total_predictions": 0}
+    ])");
+
+    const auto summaries = selectAllTaskSummaries(tasks, "image");
+    CHECK(summaries.size() == 3);
+    CHECK(summaries[0].taskId == 1);
+    CHECK(summaries[0].hasAnnotation == true);
+    CHECK(summaries[0].hasPrediction == false);
+    CHECK(summaries[1].hasAnnotation == false);
+    CHECK(summaries[1].hasPrediction == true);
+    CHECK(summaries[2].hasAnnotation == false);
+    CHECK(summaries[2].hasPrediction == false);
+}
+
+void test_selectAllTaskSummaries_fallsBackToArrayLengths() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a/1.jpg"}, "annotations": [{}], "predictions": []}
+    ])");
+    const auto summaries = selectAllTaskSummaries(tasks, "image");
+    CHECK(summaries.size() == 1);
+    CHECK(summaries[0].hasAnnotation == true);
+    CHECK(summaries[0].hasPrediction == false);
+}
+
+void test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"data": {"image": "/a/1.jpg"}},
+        {"id": 2, "data": {}}
+    ])");
+    CHECK(selectAllTaskSummaries(tasks, "image").empty());
+}
+
+void test_parseLabelStudioTaskDetail_withAnnotationAndPrediction() {
+    const auto task = nlohmann::json::parse(R"({
+        "id": 5,
+        "data": {"image": "/data/upload/1/x.png"},
+        "annotations": [{"id": 42, "result": [{"type": "choices", "value": {"choices": ["Good"]}}]}],
+        "predictions": [{"result": [{"type": "choices", "value": {"choices": ["Defect"]}}]}]
+    })");
+
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(detail.error.empty());
+    CHECK(detail.taskId == 5);
+    CHECK(detail.imagePath == "/data/upload/1/x.png");
+    CHECK(detail.annotationId.has_value());
+    CHECK(*detail.annotationId == 42);
+    CHECK(detail.annotationResult.size() == 1);
+    CHECK(detail.predictionResult.size() == 1);
+}
+
+void test_parseLabelStudioTaskDetail_noAnnotationOrPrediction() {
+    const auto task = nlohmann::json::parse(R"({"id": 6, "data": {"image": "/a/6.jpg"}, "annotations": [], "predictions": []})");
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(detail.error.empty());
+    CHECK(!detail.annotationId.has_value());
+    CHECK(detail.annotationResult.empty());
+    CHECK(detail.predictionResult.empty());
+}
+
+void test_parseLabelStudioTaskDetail_missingImageKeyIsError() {
+    const auto task = nlohmann::json::parse(R"({"id": 7, "data": {}})");
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(!detail.error.empty());
+}
+
 } // namespace
 
 int main() {
@@ -240,6 +309,12 @@ int main() {
     test_parseLabelStudioProjectConfigXml_bothTagsPresent();
     test_parseLabelStudioProjectConfigXml_noImageTagIsError();
     test_parseLabelStudioProjectConfigXml_malformedXmlIsError();
+    test_selectAllTaskSummaries_flagsAnnotationsAndPredictions();
+    test_selectAllTaskSummaries_fallsBackToArrayLengths();
+    test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey();
+    test_parseLabelStudioTaskDetail_withAnnotationAndPrediction();
+    test_parseLabelStudioTaskDetail_noAnnotationOrPrediction();
+    test_parseLabelStudioTaskDetail_missingImageKeyIsError();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

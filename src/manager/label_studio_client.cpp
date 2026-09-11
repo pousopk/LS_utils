@@ -366,6 +366,104 @@ std::vector<LabelStudioLabeledTask> selectLabeledTasks(
     return result;
 }
 
+std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
+    const nlohmann::json& tasksJson, const std::string& dataImageKey) {
+    std::vector<LabelStudioTaskSummary> summaries;
+    const nlohmann::json* tasks = &tasksJson;
+    if (tasksJson.is_object() && tasksJson.contains("tasks") && tasksJson["tasks"].is_array()) {
+        tasks = &tasksJson["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return summaries;
+    }
+
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        if (!task.contains("data") || !task["data"].contains(dataImageKey) || !task["data"][dataImageKey].is_string()) {
+            continue;
+        }
+
+        LabelStudioTaskSummary summary;
+        summary.taskId = task["id"].get<int>();
+        summary.imagePath = task["data"][dataImageKey].get<std::string>();
+
+        if (task.contains("total_annotations") && task["total_annotations"].is_number_integer()) {
+            summary.hasAnnotation = task["total_annotations"].get<int>() > 0;
+        } else if (task.contains("annotations") && task["annotations"].is_array()) {
+            summary.hasAnnotation = !task["annotations"].empty();
+        }
+        if (task.contains("total_predictions") && task["total_predictions"].is_number_integer()) {
+            summary.hasPrediction = task["total_predictions"].get<int>() > 0;
+        } else if (task.contains("predictions") && task["predictions"].is_array()) {
+            summary.hasPrediction = !task["predictions"].empty();
+        }
+
+        summaries.push_back(std::move(summary));
+    }
+
+    return summaries;
+}
+
+LabelStudioTaskDetail parseLabelStudioTaskDetail(const nlohmann::json& taskJson, const std::string& dataImageKey) {
+    LabelStudioTaskDetail detail;
+    if (!taskJson.contains("id") || !taskJson["id"].is_number_integer()) {
+        detail.error = "Task response has no numeric id";
+        return detail;
+    }
+    detail.taskId = taskJson["id"].get<int>();
+
+    if (!taskJson.contains("data") || !taskJson["data"].contains(dataImageKey) || !taskJson["data"][dataImageKey].is_string()) {
+        detail.error = "Task response is missing data[" + dataImageKey + "]";
+        return detail;
+    }
+    detail.imagePath = taskJson["data"][dataImageKey].get<std::string>();
+
+    if (taskJson.contains("annotations") && taskJson["annotations"].is_array() && !taskJson["annotations"].empty()) {
+        const auto& firstAnnotation = taskJson["annotations"][0];
+        if (firstAnnotation.contains("id") && firstAnnotation["id"].is_number_integer()) {
+            detail.annotationId = firstAnnotation["id"].get<int>();
+        }
+        if (firstAnnotation.contains("result") && firstAnnotation["result"].is_array()) {
+            detail.annotationResult = firstAnnotation["result"];
+        }
+    }
+    if (taskJson.contains("predictions") && taskJson["predictions"].is_array() && !taskJson["predictions"].empty()) {
+        const auto& firstPrediction = taskJson["predictions"][0];
+        if (firstPrediction.contains("result") && firstPrediction["result"].is_array()) {
+            detail.predictionResult = firstPrediction["result"];
+        }
+    }
+
+    return detail;
+}
+
+LabelStudioTaskDetail fetchLabelStudioTaskById(
+    const std::string& baseUrl, const std::string& apiToken, int taskId, const std::string& dataImageKey) {
+    LabelStudioTaskDetail detail;
+    const std::string url = normalizeBaseUrl(baseUrl) + "/api/tasks/" + std::to_string(taskId) + "/";
+
+    std::string responseBody;
+    long httpCode = 0;
+    std::string networkError;
+    if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+        detail.error = networkError;
+        return detail;
+    }
+    if (httpCode < 200 || httpCode >= 300) {
+        detail.error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
+        return detail;
+    }
+
+    try {
+        return parseLabelStudioTaskDetail(nlohmann::json::parse(responseBody), dataImageKey);
+    } catch (const nlohmann::json::parse_error&) {
+        detail.error = "Failed to parse task response";
+        return detail;
+    }
+}
+
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries) {
     std::vector<std::vector<TimestampMatchCandidate>> result(queries.size());
@@ -514,6 +612,19 @@ bool fetchAllLabelStudioTasksRaw(
     }
 
     return true;
+}
+
+LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey) {
+    LabelStudioTaskListResult out;
+    nlohmann::json allTasks;
+    std::string error;
+    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, error)) {
+        out.error = error;
+        return out;
+    }
+    out.tasks = selectAllTaskSummaries(allTasks, dataImageKey);
+    return out;
 }
 
 // Uploads `imagePath`'s bytes as a real multipart file upload to the
