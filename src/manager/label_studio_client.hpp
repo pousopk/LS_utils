@@ -3,6 +3,7 @@
 #include "manager/label_studio_import.hpp"
 
 #include <atomic>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <nlohmann/json_fwd.hpp>
@@ -21,6 +22,76 @@ std::string extractXmlTagAttribute(const std::string& xml, const std::string& ta
 
 // Pure function: extractXmlTagAttribute(xml, tagName, "name").
 std::string extractXmlTagNameAttribute(const std::string& xml, const std::string& tagName);
+
+// Pure function: parses Label Studio's `created_at` timestamp format
+// (ISO-8601 UTC, e.g. "2024-05-01T12:34:56.789012Z" -- fractional seconds
+// and/or a trailing "Z" are both tolerated and ignored) into epoch
+// seconds. Returns std::nullopt if the string doesn't match
+// "%Y-%m-%dT%H:%M:%S" at minimum.
+std::optional<std::time_t> parseIso8601Utc(const std::string& value);
+
+// Parses a manually-typed factory timestamp in "YYYY/MM/DD HH:MM:SS"
+// format (e.g. "2026/09/10 12:00:00") as LOCAL time -- the timestamp
+// engraved on a physical piece reflects wherever/whenever it was
+// engraved, not UTC, and comparing it against Label Studio's UTC
+// `created_at` requires converting it first. Uses mktime, so it respects
+// the running machine's configured timezone and DST rules; this assumes
+// the machine running vision_app is set to the same timezone as the
+// factory. Returns std::nullopt on any format mismatch. Not a pure
+// function (mktime depends on the process's timezone setting).
+std::optional<std::time_t> parseTypedLocalTimestamp(const std::string& value);
+
+struct TimestampMatchQuery {
+    std::time_t timestamp = 0;        // epoch seconds, e.g. from parseTypedLocalTimestamp
+    long long toleranceSeconds = 0;   // symmetric window: [timestamp - toleranceSeconds, timestamp + toleranceSeconds]
+};
+
+struct TimestampMatchCandidate {
+    int taskId = 0;
+    std::string imagePath;      // task.data[dataImageKey]
+    std::time_t createdAt = 0;  // epoch seconds
+    long long deltaSeconds = 0; // createdAt - query.timestamp (negative if the task predates the query)
+};
+
+// Pure function: for each of `queries` (result vector is the same length
+// and order), returns every task in `tasksJson` whose `created_at` falls
+// within [timestamp - toleranceSeconds, timestamp + toleranceSeconds],
+// sorted by abs(deltaSeconds) ascending (closest first). Tasks missing
+// `id`, missing/unparseable `created_at`, or missing `data[dataImageKey]`
+// as a string are skipped -- same tolerance for partial task records as
+// selectUnlabeledTasks/selectLabeledTasks. A task can appear under more
+// than one query if the windows overlap.
+std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
+    const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
+
+struct FindTasksNearTimestampsResult {
+    std::vector<std::vector<TimestampMatchCandidate>> perQuery;   // same order/length as `queries`
+    std::string error;   // set only on a hard failure to fetch the task list; zero candidates for a query is normal
+};
+
+// Fetches the project's full task list once (the same paged `fields=all`
+// fetch every other Label Studio flow here uses) and matches it against
+// `queries` via matchTasksToTimestamps.
+FindTasksNearTimestampsResult findTasksNearTimestamps(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
+    const std::vector<TimestampMatchQuery>& queries);
+
+struct LabelStudioTaskImageDownload {
+    int downloaded = 0;
+    int downloadFailed = 0;
+};
+
+// Downloads each of `candidates`' images into `outputFolder` as
+// `<taskId><original extension>`, same convention as
+// fetchAndDownloadUnlabeledTasks. Candidates are not deduplicated by this
+// function -- pass an already-deduplicated list if the same task appears
+// under more than one timestamp query. `outputFolder` is not created or
+// cleared by this function. `onProgress`/`cancelRequested` behave exactly
+// as fetchAndDownloadUnlabeledTasks's.
+LabelStudioTaskImageDownload downloadLabelStudioTaskImages(
+    const std::string& baseUrl, const std::string& apiToken, const std::vector<TimestampMatchCandidate>& candidates,
+    const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 struct LabelStudioLabelingConfig {
     std::string fromName;
