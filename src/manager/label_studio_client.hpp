@@ -114,6 +114,42 @@ struct LabelStudioLabelingConfig {
 LabelStudioLabelingConfig fetchLabelStudioLabelingConfig(
     const std::string& baseUrl, int projectId, const std::string& apiToken, bool isDetection);
 
+enum class LabelStudioControlTagType {
+    RectangleLabels,
+    Choices,
+    BrushLabels,
+};
+
+struct LabelStudioControlTag {
+    LabelStudioControlTagType type;
+    std::string name;                     // from_name
+    std::string toName;                   // to_name
+    std::vector<std::string> labels;      // child <Label value="..."/> or <Choice value="..."/>, in config order
+};
+
+struct LabelStudioProjectConfig {
+    std::string dataImageKey;                        // from <Image value="$..."/>, leading '$' stripped
+    std::vector<LabelStudioControlTag> controlTags;   // every RectangleLabels/Choices tag found, in document order
+    std::string error;                                // empty on success
+};
+
+// Pure function: parses a Label Studio project's raw label_config XML into
+// every RectangleLabels/Choices control tag it contains (BrushLabels is not
+// parsed yet -- phase 3), each with its own from_name/to_name and full
+// label/choice value list -- unlike fetchLabelStudioLabelingConfig, which
+// only looks at the first matching tag of one type. Uses pugixml (a real
+// parser) rather than extractXmlTagAttribute's regex approach, since this
+// needs to walk repeated/nested tags reliably. Returns with `error` set if
+// the XML doesn't parse, or no <Image> tag is found.
+LabelStudioProjectConfig parseLabelStudioProjectConfigXml(const std::string& labelConfigXml);
+
+// Fetches the project's labeling config via GET
+// {baseUrl}/api/projects/{projectId}/ (same endpoint as
+// fetchLabelStudioLabelingConfig) and parses it with
+// parseLabelStudioProjectConfigXml.
+LabelStudioProjectConfig fetchLabelStudioProjectConfigDetailed(
+    const std::string& baseUrl, int projectId, const std::string& apiToken);
+
 // Pure function: parses a Label Studio tasks-list API response --
 // handling both a bare JSON array and an object with a "tasks" array,
 // since this varies across Label Studio versions -- and returns the

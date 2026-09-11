@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include <pugixml.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -169,6 +170,81 @@ LabelStudioLabelingConfig fetchLabelStudioLabelingConfig(
     }
 
     return result;
+}
+
+LabelStudioProjectConfig parseLabelStudioProjectConfigXml(const std::string& labelConfigXml) {
+    LabelStudioProjectConfig config;
+
+    pugi::xml_document doc;
+    const pugi::xml_parse_result parseResult = doc.load_string(labelConfigXml.c_str());
+    if (!parseResult) {
+        config.error = std::string("Failed to parse labeling config XML: ") + parseResult.description();
+        return config;
+    }
+
+    const pugi::xml_node imageNode = doc.find_node([](pugi::xml_node node) {
+        return std::string(node.name()) == "Image";
+    });
+    if (!imageNode) {
+        config.error = "No <Image> tag found in this project's labeling config";
+        return config;
+    }
+    const std::string rawDataKey = imageNode.attribute("value").value();
+    config.dataImageKey = (!rawDataKey.empty() && rawDataKey.front() == '$') ? rawDataKey.substr(1) : rawDataKey;
+
+    auto collectTags = [&](const char* tagName, const char* childName, LabelStudioControlTagType type) {
+        for (pugi::xpath_node node : doc.select_nodes((std::string("//") + tagName).c_str())) {
+            LabelStudioControlTag tag;
+            tag.type = type;
+            tag.name = node.node().attribute("name").value();
+            tag.toName = node.node().attribute("toName").value();
+            for (pugi::xml_node child : node.node().children(childName)) {
+                const std::string value = child.attribute("value").value();
+                if (!value.empty()) {
+                    tag.labels.push_back(value);
+                }
+            }
+            config.controlTags.push_back(std::move(tag));
+        }
+    };
+    collectTags("RectangleLabels", "Label", LabelStudioControlTagType::RectangleLabels);
+    collectTags("Choices", "Choice", LabelStudioControlTagType::Choices);
+
+    return config;
+}
+
+LabelStudioProjectConfig fetchLabelStudioProjectConfigDetailed(
+    const std::string& baseUrl, int projectId, const std::string& apiToken) {
+    LabelStudioProjectConfig config;
+    if (baseUrl.empty()) {
+        config.error = "Label Studio base URL is empty";
+        return config;
+    }
+
+    const std::string url = normalizeBaseUrl(baseUrl) + "/api/projects/" + std::to_string(projectId) + "/";
+    std::string responseBody;
+    long httpCode = 0;
+    std::string networkError;
+    if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+        config.error = networkError;
+        return config;
+    }
+    if (httpCode < 200 || httpCode >= 300) {
+        config.error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
+        return config;
+    }
+
+    try {
+        const auto parsed = nlohmann::json::parse(responseBody);
+        if (!parsed.contains("label_config") || !parsed["label_config"].is_string()) {
+            config.error = "Project response has no label_config";
+            return config;
+        }
+        return parseLabelStudioProjectConfigXml(parsed["label_config"].get<std::string>());
+    } catch (const nlohmann::json::parse_error&) {
+        config.error = "Failed to parse project response";
+        return config;
+    }
 }
 
 std::vector<int> selectMostRecentTaskIds(const nlohmann::json& tasksJson, size_t count) {

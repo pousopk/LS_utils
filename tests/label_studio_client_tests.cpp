@@ -167,6 +167,60 @@ void test_matchTasksToTimestamps_emptyQueriesReturnsEmpty() {
     CHECK(matchTasksToTimestamps(tasks, "image", {}).empty());
 }
 
+void test_parseLabelStudioProjectConfigXml_singleRectangleLabelsTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<RectangleLabels name="label" toName="image">)"
+        R"(<Label value="Person"/><Label value="Car"/></RectangleLabels></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.dataImageKey == "image");
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::RectangleLabels);
+    CHECK(config.controlTags[0].name == "label");
+    CHECK(config.controlTags[0].toName == "image");
+    CHECK(config.controlTags[0].labels.size() == 2);
+    CHECK(config.controlTags[0].labels[0] == "Person");
+    CHECK(config.controlTags[0].labels[1] == "Car");
+}
+
+void test_parseLabelStudioProjectConfigXml_choicesTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$photo"/>)"
+        R"(<Choices name="class" toName="image">)"
+        R"(<Choice value="Good"/><Choice value="Defect"/></Choices></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.dataImageKey == "photo"); // leading '$' stripped
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::Choices);
+    CHECK(config.controlTags[0].labels.size() == 2);
+    CHECK(config.controlTags[0].labels[1] == "Defect");
+}
+
+void test_parseLabelStudioProjectConfigXml_bothTagsPresent() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<RectangleLabels name="label" toName="image"><Label value="Person"/></RectangleLabels>)"
+        R"(<Choices name="class" toName="image"><Choice value="Good"/></Choices></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.controlTags.size() == 2);
+}
+
+void test_parseLabelStudioProjectConfigXml_noImageTagIsError() {
+    const auto config = parseLabelStudioProjectConfigXml(R"(<View><RectangleLabels name="label" toName="image"/></View>)");
+    CHECK(!config.error.empty());
+}
+
+void test_parseLabelStudioProjectConfigXml_malformedXmlIsError() {
+    const auto config = parseLabelStudioProjectConfigXml("<View><Unclosed>");
+    CHECK(!config.error.empty());
+}
+
 } // namespace
 
 int main() {
@@ -181,6 +235,11 @@ int main() {
     test_matchTasksToTimestamps_skipsTaskMissingCreatedAtOrDataKey();
     test_matchTasksToTimestamps_taskMatchesMultipleQueriesIndependently();
     test_matchTasksToTimestamps_emptyQueriesReturnsEmpty();
+    test_parseLabelStudioProjectConfigXml_singleRectangleLabelsTag();
+    test_parseLabelStudioProjectConfigXml_choicesTag();
+    test_parseLabelStudioProjectConfigXml_bothTagsPresent();
+    test_parseLabelStudioProjectConfigXml_noImageTagIsError();
+    test_parseLabelStudioProjectConfigXml_malformedXmlIsError();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
