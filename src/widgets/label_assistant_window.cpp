@@ -1,6 +1,7 @@
 #include "widgets/label_assistant_window.hpp"
 
 #include "manager/app_runtime.hpp"
+#include "manager/label_studio_client.hpp"
 #include "widgets/file_browser_utils.hpp"
 #include "widgets/model_slot_config_widget.hpp"
 
@@ -188,7 +189,7 @@ std::vector<LabelAssistantImageEntry> buildImageEntries(const LabelAssistantStat
     return entries;
 }
 
-void drawImageList(LabelAssistantState& state) {
+void drawImageList(LabelAssistantState& state, const LabelTaskCallback& onLabelTask) {
     ImGui::BeginChild("LabelAssistantImageList", ImVec2(320.0f, 380.0f), true);
     ImGui::InputTextWithHint("##LabelAssistantImageFilter", "Search filename...", &state.imageListFilter);
 
@@ -247,6 +248,13 @@ void drawImageList(LabelAssistantState& state) {
         const std::string label = entry->filename + "  [" + entry->labelSummary + "]";
         if (ImGui::Selectable(label.c_str(), selected)) {
             state.selectedImageFilename = entry->filename;
+        }
+        const auto taskId = parseTaskIdFromFilename(entry->filename);
+        if (taskId.has_value()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(("Label##" + entry->filename).c_str())) {
+                onLabelTask(state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, *taskId);
+            }
         }
     }
     ImGui::EndChild();
@@ -411,7 +419,7 @@ void drawFilePickerPopup(LabelAssistantState& state) {
 
 } // namespace
 
-void drawLabelAssistantWindow(bool* show, LabelAssistantState& state) {
+void drawLabelAssistantWindow(bool* show, LabelAssistantState& state, const LabelTaskCallback& onLabelTask) {
     if (!*show) {
         return;
     }
@@ -445,7 +453,7 @@ void drawLabelAssistantWindow(bool* show, LabelAssistantState& state) {
         } else {
             drawResultsSummary(state);
             ImGui::Separator();
-            drawImageList(state);
+            drawImageList(state, onLabelTask);
             drawSelectedImageDetail(state);
             drawExportSection(state);
         }

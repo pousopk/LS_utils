@@ -94,7 +94,7 @@ void drawSearchBar(TimestampSearchState& state) {
     }
 }
 
-void drawResults(TimestampSearchState& state) {
+void drawResults(TimestampSearchState& state, const LabelTaskCallback& onLabelTask) {
     if (!state.resultError.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.resultError.c_str());
         return;
@@ -137,6 +137,11 @@ void drawResults(TimestampSearchState& state) {
             std::strftime(timeBuf, sizeof(timeBuf), "%Y/%m/%d %H:%M:%S", &tm);
             ImGui::Text("Created: %s UTC", timeBuf);
             ImGui::Text("Delta: %+lld sec", candidateView.candidate.deltaSeconds);
+            if (ImGui::SmallButton("Label")) {
+                onLabelTask(
+                    state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken,
+                    candidateView.candidate.taskId);
+            }
             ImGui::EndGroup();
             ImGui::PopID();
         }
@@ -145,7 +150,7 @@ void drawResults(TimestampSearchState& state) {
 
 } // namespace
 
-void drawTimestampSearchWindow(bool* show, TimestampSearchState& state) {
+void drawTimestampSearchWindow(bool* show, TimestampSearchState& state, const LabelTaskCallback& onLabelTask) {
     if (!*show) {
         return;
     }
@@ -162,7 +167,7 @@ void drawTimestampSearchWindow(bool* show, TimestampSearchState& state) {
     drawSearchBar(state);
 
     if (state.runState == TimestampSearchRunState::Complete) {
-        drawResults(state);
+        drawResults(state, onLabelTask);
     }
 
     ImGui::End();
