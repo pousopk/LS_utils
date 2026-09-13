@@ -11,6 +11,7 @@
 #include "manager/detection_metrics.hpp"
 #include "manager/inference_worker.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/label_studio_session.hpp"
 #include "manager/model_metadata_detection.hpp"
 #include "manager/yolo_inference.hpp"
 #include "objects/frame_source.hpp"
@@ -184,9 +185,6 @@ struct BatchRuntime {
     // under a task's `data` holding its image path, needed to know what
     // to download; unlike Label Assistant's push, no from_name/to_name
     // are needed here since this only ever downloads, never pushes.
-    std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
-    std::string labelStudioApiToken;
     std::string labelStudioDataImageKey;
     std::string labelStudioAutoFetchStatus;
     std::string lastAutoFetchKey;
@@ -231,12 +229,12 @@ struct BatchRuntime {
 // LocalFolder mode only.
 void loadBatchEvalGroundTruth(BatchRuntime& batch);
 
-// Runs auto-detect on batch.labelStudioBaseUrl/ProjectId/ApiToken via the
-// shared fetchLabelStudioLabelingConfig, storing only dataImageKey (the
-// from_name/to_name it also returns are unused here). Re-fetches only
-// when that connection combination actually changes (see
+// Runs auto-detect on session's (baseUrl, activeProjectId, apiToken) via
+// the shared fetchLabelStudioLabelingConfig, storing only dataImageKey
+// (the from_name/to_name it also returns are unused here). Re-fetches
+// only when that connection combination actually changes (see
 // batch.lastAutoFetchKey). LabelStudioProject mode only.
-void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch);
+void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch, const LabelStudioSessionState& session);
 
 // Builds a BatchEvalRunConfig from slots + batch config (LocalFolder:
 // imageFolderPath + any loaded groundTruth as-is; LabelStudioProject:
@@ -244,10 +242,12 @@ void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch);
 // at it, and lets the worker fill in groundTruth itself during its
 // download phase), clears any previous results, and calls
 // batch.worker.start(...). Caller must have already verified the
-// required slot(s) are loaded (and, in LabelStudioProject mode, that the
-// connection fields are filled in). Sets batch.runState = Running.
+// required slot(s) are loaded (and, in LabelStudioProject mode, that
+// session is connected with an active project). Sets batch.runState =
+// Running.
 void startBatchEvaluationRun(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch);
+    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch,
+    const LabelStudioSessionState& session);
 
 // Called once per main-loop iteration while the window is open: while a
 // run is in progress, polls worker.progress()/tryTakeResult() and, on
@@ -255,10 +255,11 @@ void startBatchEvaluationRun(
 // Always also lazily loads/annotates/uploads the currently selected
 // image's preview textures (a no-op if the selection hasn't changed), and
 // lazily runs syncBatchEvalLabelStudioAutoFetch (a no-op unless
-// LabelStudioProject mode's connection fields are filled in and changed).
+// LabelStudioProject mode's session is connected with an active project
+// and it changed).
 void updateBatchRuntime(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
-    BatchRuntime& batch);
+    BatchRuntime& batch, const LabelStudioSessionState& session);
 
 // True if the given filename is a "mismatch" for either slot: predicted
 // top-1 != true label (classification), or the image has an unmatched

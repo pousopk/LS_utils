@@ -2,6 +2,7 @@
 
 #include "objects/media_source.hpp"
 #include "widgets/file_browser_utils.hpp"
+#include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
 
 #include <imgui.h>
@@ -271,19 +272,6 @@ void drawLocalFolderAndGroundTruthPickers(ModelEvaluationState& state) {
     }
 }
 
-// Downloads both images and ground truth from an existing Label Studio
-// project -- see fetchAndDownloadLabeledDataset. No from_name/to_name
-// fields here (unlike Label Assistant's push): this flow only ever reads
-// from Label Studio, never writes back to it.
-void drawBatchLabelStudioConnectionFields(BatchRuntime& batch) {
-    ImGui::InputText("Label Studio URL##Batch", &batch.labelStudioBaseUrl);
-    ImGui::InputInt("Project ID##Batch", &batch.labelStudioProjectId);
-    ImGui::InputText("API Token##Batch", &batch.labelStudioApiToken, ImGuiInputTextFlags_Password);
-    if (!batch.labelStudioAutoFetchStatus.empty()) {
-        ImGui::TextDisabled("%s", batch.labelStudioAutoFetchStatus.c_str());
-    }
-}
-
 void drawSampleCheckbox(BatchRuntime& batch) {
     ImGui::Checkbox("Randomly sample", &batch.sampleEnabled);
     ImGui::SameLine();
@@ -301,7 +289,7 @@ void drawSampleCheckbox(BatchRuntime& batch) {
     }
 }
 
-void drawRunBar(ModelEvaluationState& state) {
+void drawRunBar(ModelEvaluationState& state, const LabelStudioSessionState& session) {
     ImGui::Separator();
     if (state.batch.runState == BatchEvalRunState::Running) {
         const std::string label = !state.batch.lastProgress.phaseLabel.empty()
@@ -339,13 +327,12 @@ void drawRunBar(ModelEvaluationState& state) {
     const bool modelsLoaded = slotALoaded && (!state.compareTwoModels || slotBLoaded);
     const bool sourceReady = state.batch.sourceMode == BatchEvalSourceMode::LocalFolder
         ? !state.batch.imageFolderPath.empty()
-        : !state.batch.labelStudioBaseUrl.empty() && state.batch.labelStudioProjectId > 0
-            && !state.batch.labelStudioApiToken.empty();
+        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty();
     const bool canRun = modelsLoaded && sourceReady;
 
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
-        startBatchEvaluationRun(state.taskMode, state.compareTwoModels, state.slots, state.batch);
+        startBatchEvaluationRun(state.taskMode, state.compareTwoModels, state.slots, state.batch, session);
     }
     ImGui::EndDisabled();
     if (!canRun) {
@@ -832,17 +819,22 @@ void drawSelectedImageDetail(ModelEvaluationState& state) {
     ImGui::EndChild();
 }
 
-void drawBatchBody(ModelEvaluationState& state) {
+void drawBatchBody(
+    ModelEvaluationState& state, const LabelStudioSessionState& session,
+    const std::function<void()>& onOpenLabelStudioWindow) {
     drawBatchSourceModeToggle(state.batch);
     if (state.batch.sourceMode == BatchEvalSourceMode::LocalFolder) {
         drawLocalFolderAndGroundTruthPickers(state);
     } else {
-        drawBatchLabelStudioConnectionFields(state.batch);
+        drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
+        if (!state.batch.labelStudioAutoFetchStatus.empty()) {
+            ImGui::TextDisabled("%s", state.batch.labelStudioAutoFetchStatus.c_str());
+        }
     }
     drawSampleCheckbox(state.batch);
     ImGui::Separator();
 
-    drawRunBar(state);
+    drawRunBar(state, session);
 
     if (state.batch.runState == BatchEvalRunState::Complete) {
         ImGui::Separator();
@@ -952,7 +944,9 @@ void drawFilePickerPopup(ModelEvaluationState& state) {
 
 } // namespace
 
-void drawModelEvaluationWindow(bool* show, ModelEvaluationState& state, std::vector<CameraSession>& sessions) {
+void drawModelEvaluationWindow(
+    bool* show, ModelEvaluationState& state, std::vector<CameraSession>& sessions,
+    const LabelStudioSessionState& session, const std::function<void()>& onOpenLabelStudioWindow) {
     if (!*show) {
         return;
     }
@@ -984,7 +978,7 @@ void drawModelEvaluationWindow(bool* show, ModelEvaluationState& state, std::vec
     if (state.source == EvaluationSourceMode::Live) {
         drawLiveBody(state, sessions);
     } else {
-        drawBatchBody(state);
+        drawBatchBody(state, session, onOpenLabelStudioWindow);
     }
 
     ImGui::End();

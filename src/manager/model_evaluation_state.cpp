@@ -404,12 +404,11 @@ void loadBatchEvalGroundTruth(BatchRuntime& batch) {
     }
 }
 
-void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch) {
-    if (batch.labelStudioBaseUrl.empty() || batch.labelStudioProjectId <= 0 || batch.labelStudioApiToken.empty()) {
+void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch, const LabelStudioSessionState& session) {
+    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
         return;
     }
-    const std::string key =
-        batch.labelStudioBaseUrl + "|" + std::to_string(batch.labelStudioProjectId) + "|" + batch.labelStudioApiToken;
+    const std::string key = session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
     if (key == batch.lastAutoFetchKey) {
         return;
     }
@@ -419,7 +418,7 @@ void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch) {
     // depend on it, and from_name/to_name (which does) are unused by this
     // download-only flow.
     const LabelStudioLabelingConfig config =
-        fetchLabelStudioLabelingConfig(batch.labelStudioBaseUrl, batch.labelStudioProjectId, batch.labelStudioApiToken, true);
+        fetchLabelStudioLabelingConfig(session.baseUrl, session.activeProjectId, session.apiToken, true);
 
     if (config.error.empty()) {
         batch.labelStudioDataImageKey = config.dataImageKey;
@@ -442,7 +441,8 @@ std::string batchEvalScratchFolder() {
 } // namespace
 
 void startBatchEvaluationRun(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch) {
+    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch,
+    const LabelStudioSessionState& session) {
     BatchEvalRunConfig config;
     config.mode = mode;
     config.source = batch.sourceMode;
@@ -453,9 +453,9 @@ void startBatchEvaluationRun(
         std::filesystem::remove_all(scratchFolder, ec);
         std::filesystem::create_directories(scratchFolder, ec);
 
-        config.labelStudioBaseUrl = batch.labelStudioBaseUrl;
-        config.labelStudioProjectId = batch.labelStudioProjectId;
-        config.labelStudioApiToken = batch.labelStudioApiToken;
+        config.labelStudioBaseUrl = session.baseUrl;
+        config.labelStudioProjectId = session.activeProjectId;
+        config.labelStudioApiToken = session.apiToken;
         config.labelStudioDataImageKey = batch.labelStudioDataImageKey;
         config.scratchFolderPath = scratchFolder;
         batch.imageFolderPath = scratchFolder;
@@ -498,7 +498,7 @@ void startBatchEvaluationRun(
 
 void updateBatchRuntime(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
-    BatchRuntime& batch) {
+    BatchRuntime& batch, const LabelStudioSessionState& session) {
     if (batch.runState == BatchEvalRunState::Running) {
         batch.lastProgress = batch.worker.progress();
 
@@ -533,7 +533,7 @@ void updateBatchRuntime(
         }
     }
 
-    syncBatchEvalLabelStudioAutoFetch(batch);
+    syncBatchEvalLabelStudioAutoFetch(batch, session);
 
     syncBatchEvalSelectedPreview(mode, slots, imageFolderPath, batch);
 }
