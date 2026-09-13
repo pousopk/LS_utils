@@ -146,14 +146,14 @@ nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int ima
     return combined;
 }
 
-void updateLabelingState(LabelingState& state) {
-    const std::string key = state.labelStudioBaseUrl + "|" + std::to_string(state.labelStudioProjectId) + "|"
-        + state.labelStudioApiToken;
-    if (!state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0 && !state.labelStudioApiToken.empty()
+void updateLabelingState(LabelingState& state, const LabelStudioSessionState& session) {
+    const std::string key =
+        session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
+    if (!session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty()
         && key != state.lastAutoFetchKey) {
         state.lastAutoFetchKey = key;
         state.projectConfig =
-            fetchLabelStudioProjectConfigDetailed(state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken);
+            fetchLabelStudioProjectConfigDetailed(session.baseUrl, session.activeProjectId, session.apiToken);
         if (!state.projectConfig.error.empty()) {
             state.configStatus = "Config error: " + state.projectConfig.error;
         } else {
@@ -208,7 +208,7 @@ void updateLabelingState(LabelingState& state) {
     }
 }
 
-void requestSelectLabelingTask(LabelingState& state, int taskId) {
+void requestSelectLabelingTask(LabelingState& state, const LabelStudioSessionState& session, int taskId) {
     if (anyEditorDirty(state)) {
         state.unsavedPromptOpen = true;
         state.unsavedPromptAction = LabelingUnsavedPromptAction::SwitchTask;
@@ -222,8 +222,8 @@ void requestSelectLabelingTask(LabelingState& state, int taskId) {
 
     LabelingJobRequest request;
     request.kind = LabelingJobKind::FetchTaskDetail;
-    request.taskDetailJob.baseUrl = state.labelStudioBaseUrl;
-    request.taskDetailJob.apiToken = state.labelStudioApiToken;
+    request.taskDetailJob.baseUrl = session.baseUrl;
+    request.taskDetailJob.apiToken = session.apiToken;
     request.taskDetailJob.taskId = taskId;
     request.taskDetailJob.dataImageKey = state.projectConfig.dataImageKey;
     request.taskDetailJob.scratchFolderPath = state.scratchFolderPath;
@@ -249,21 +249,21 @@ std::optional<int> nextLabelingTaskId(const LabelingState& state, int direction)
     return state.taskList[targetIndex].taskId;
 }
 
-void beginSubmitLabelingAnnotation(LabelingState& state) {
+void beginSubmitLabelingAnnotation(LabelingState& state, const LabelStudioSessionState& session) {
     state.submitInProgress = true;
     state.submitStatus.clear();
 
     LabelingJobRequest request;
     request.kind = LabelingJobKind::SubmitAnnotation;
-    request.submitJob.baseUrl = state.labelStudioBaseUrl;
-    request.submitJob.apiToken = state.labelStudioApiToken;
+    request.submitJob.baseUrl = session.baseUrl;
+    request.submitJob.apiToken = session.apiToken;
     request.submitJob.taskId = state.selectedTaskId;
     request.submitJob.existingAnnotationId = state.currentAnnotationId;
     request.submitJob.resultArray = buildCombinedAnnotationResult(state, state.imageWidth, state.imageHeight);
     state.worker.start(std::move(request));
 }
 
-void confirmDiscardAndSwitchTask(LabelingState& state) {
+void confirmDiscardAndSwitchTask(LabelingState& state, const LabelStudioSessionState& session) {
     const int pendingTaskId = state.unsavedPromptPendingTaskId;
     const LabelingUnsavedPromptAction pendingAction = state.unsavedPromptAction;
     state.unsavedPromptOpen = false;
@@ -281,19 +281,19 @@ void confirmDiscardAndSwitchTask(LabelingState& state) {
     }
 
     if (pendingAction == LabelingUnsavedPromptAction::SwitchTask) {
-        requestSelectLabelingTask(state, pendingTaskId);
+        requestSelectLabelingTask(state, session, pendingTaskId);
     }
     // CloseWindow: the window itself (Task 11) closes on seeing the prompt cleared with no pending switch.
 }
 
-void confirmSaveAndSwitchTask(LabelingState& state) {
+void confirmSaveAndSwitchTask(LabelingState& state, const LabelStudioSessionState& session) {
     // Closing the prompt here and leaving unsavedPromptPendingTaskId/
     // unsavedPromptAction set lets the window (Task 11) re-check
     // submitInProgress each frame and re-issue the pending switch/close
     // once the save completes, without LabelingState scheduling anything
     // across frames itself.
     state.unsavedPromptOpen = false;
-    beginSubmitLabelingAnnotation(state);
+    beginSubmitLabelingAnnotation(state, session);
 }
 
 cv::Mat compositeMaskOverlay(const cv::Mat& baseImage, const std::vector<DraftBrushRegion>& regions) {

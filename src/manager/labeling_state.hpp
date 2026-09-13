@@ -2,6 +2,7 @@
 
 #include "manager/label_studio_client.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/label_studio_session.hpp"
 #include "manager/labeling_worker.hpp"
 
 #include <GLFW/glfw3.h>
@@ -79,14 +80,6 @@ enum class LabelingUnsavedPromptAction {
 };
 
 struct LabelingState {
-    // Connection fields, own to this window -- matching the existing
-    // per-window convention (Label Assistant, Timestamp Search, Batch
-    // Eval each hold their own copy too); unifying this is explicitly
-    // deferred, see the design doc's Non-goals.
-    std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
-    std::string labelStudioApiToken;
-
     LabelingWorker worker;
     std::string scratchFolderPath;   // set once by the window on first open, see Task 8
 
@@ -165,7 +158,7 @@ cv::Mat compositeMaskOverlay(const cv::Mat& baseImage, const std::vector<DraftBr
 
 // Called once per main-loop iteration while the Labeling window is open.
 // Lazily (re)fetches state.projectConfig whenever
-// (labelStudioBaseUrl, labelStudioProjectId, labelStudioApiToken) changes
+// (session.baseUrl, session.activeProjectId, session.apiToken) changes
 // (same lastAutoFetchKey convention as Label Assistant/Timestamp Search),
 // calling resetLabelingEditorsFromConfig on a successful fetch. Also polls
 // state.worker for a finished job and applies its result: FetchTaskList
@@ -173,14 +166,14 @@ cv::Mat compositeMaskOverlay(const cv::Mat& baseImage, const std::vector<DraftBr
 // (via applyTaskDetailToEditors) and state.imageWidth/imageHeight/
 // imageTexture; SubmitAnnotation clears both editors' dirty flags on
 // success and sets state.submitStatus either way.
-void updateLabelingState(LabelingState& state);
+void updateLabelingState(LabelingState& state, const LabelStudioSessionState& session);
 
 // Requests switching the selected task to `taskId`. If anyEditorDirty(state)
 // is true, opens the unsaved-changes prompt instead of switching
 // immediately (state.unsavedPromptAction = SwitchTask,
 // state.unsavedPromptPendingTaskId = taskId); otherwise starts a
-// FetchTaskDetail job right away.
-void requestSelectLabelingTask(LabelingState& state, int taskId);
+// FetchTaskDetail job right away, using session's connection info.
+void requestSelectLabelingTask(LabelingState& state, const LabelStudioSessionState& session, int taskId);
 
 // Pure function: finds state.selectedTaskId's position in state.taskList
 // and returns the task id `direction` steps away (+1 = next, -1 =
@@ -192,15 +185,15 @@ std::optional<int> nextLabelingTaskId(const LabelingState& state, int direction)
 
 // Starts a SubmitAnnotation job from buildCombinedAnnotationResult(state,
 // state.imageWidth, state.imageHeight), passing state.currentAnnotationId
-// through (present -> update, absent -> create). Sets
-// state.submitInProgress = true; updateLabelingState clears it once the
-// job completes.
-void beginSubmitLabelingAnnotation(LabelingState& state);
+// through (present -> update, absent -> create), using session's
+// connection info. Sets state.submitInProgress = true; updateLabelingState
+// clears it once the job completes.
+void beginSubmitLabelingAnnotation(LabelingState& state, const LabelStudioSessionState& session);
 
 // Unsaved-changes prompt resolution: Discard closes the prompt and
 // proceeds with whatever action was pending (switch task / close window)
 // without saving.
-void confirmDiscardAndSwitchTask(LabelingState& state);
+void confirmDiscardAndSwitchTask(LabelingState& state, const LabelStudioSessionState& session);
 
 // Unsaved-changes prompt resolution: Save submits the current edits first
 // (beginSubmitLabelingAnnotation), then proceeds with the pending action
@@ -208,4 +201,4 @@ void confirmDiscardAndSwitchTask(LabelingState& state);
 // and let the caller (the window, Task 11) re-issue the pending
 // switch/close after seeing submitInProgress go false -- LabelingState
 // itself doesn't schedule follow-up actions across frames.
-void confirmSaveAndSwitchTask(LabelingState& state);
+void confirmSaveAndSwitchTask(LabelingState& state, const LabelStudioSessionState& session);

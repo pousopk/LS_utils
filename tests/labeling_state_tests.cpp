@@ -210,7 +210,8 @@ void test_confirmDiscardAndSwitchTask_clearsMaskEditorDirty() {
     state.maskEditor->dirty = true;
     state.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
 
-    confirmDiscardAndSwitchTask(state);
+    const LabelStudioSessionState session;
+    confirmDiscardAndSwitchTask(state, session);
 
     CHECK(!state.maskEditor->dirty);
     CHECK(!anyEditorDirty(state));

@@ -1,6 +1,7 @@
 #include "widgets/labeling_window.hpp"
 
 #include "manager/app_runtime.hpp"
+#include "widgets/label_studio_window.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -22,28 +23,19 @@ void ensureScratchFolder(LabelingState& state) {
     state.scratchFolderPath = path;
 }
 
-void drawConnectionFields(LabelingState& state) {
-    ImGui::InputText("Label Studio URL", &state.labelStudioBaseUrl);
-    ImGui::InputInt("Project ID", &state.labelStudioProjectId);
-    ImGui::InputText("API Token", &state.labelStudioApiToken, ImGuiInputTextFlags_Password);
-    if (!state.configStatus.empty()) {
-        ImGui::TextDisabled("%s", state.configStatus.c_str());
-    }
-}
-
-void drawTaskListPanel(LabelingState& state) {
+void drawTaskListPanel(LabelingState& state, const LabelStudioSessionState& session) {
     ImGui::BeginChild("LabelingTaskList", ImVec2(220.0f, 0), true);
 
-    const bool canList = !state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0
-        && !state.labelStudioApiToken.empty() && !state.projectConfig.dataImageKey.empty();
+    const bool canList = !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty()
+        && !state.projectConfig.dataImageKey.empty();
     ImGui::BeginDisabled(!canList || state.taskListLoading);
     if (ImGui::Button("Refresh task list", ImVec2(-1, 0))) {
         state.taskListLoading = true;
         LabelingJobRequest request;
         request.kind = LabelingJobKind::FetchTaskList;
-        request.taskListJob.baseUrl = state.labelStudioBaseUrl;
-        request.taskListJob.projectId = state.labelStudioProjectId;
-        request.taskListJob.apiToken = state.labelStudioApiToken;
+        request.taskListJob.baseUrl = session.baseUrl;
+        request.taskListJob.projectId = session.activeProjectId;
+        request.taskListJob.apiToken = session.apiToken;
         request.taskListJob.dataImageKey = state.projectConfig.dataImageKey;
         state.worker.start(std::move(request));
     }
@@ -59,7 +51,7 @@ void drawTaskListPanel(LabelingState& state) {
         const bool selected = state.selectedTaskId == task.taskId;
         const std::string label = "#" + std::to_string(task.taskId) + (task.hasAnnotation ? "  [labeled]" : "");
         if (ImGui::Selectable(label.c_str(), selected)) {
-            requestSelectLabelingTask(state, task.taskId);
+            requestSelectLabelingTask(state, session, task.taskId);
         }
         ImGui::PopID();
     }
@@ -544,7 +536,7 @@ void drawImageCanvas(LabelingState& state, float width, bool& maskChanged) {
 // Gated on !IsAnyItemActive() so these don't fire while typing in the
 // connection fields; the caller additionally gates this on the Labeling
 // window having focus, so these don't hijack the shortcuts globally.
-void handleLabelingWindowKeyboardShortcuts(LabelingState& state) {
+void handleLabelingWindowKeyboardShortcuts(LabelingState& state, const LabelStudioSessionState& session) {
     if (ImGui::IsAnyItemActive()) {
         return;
     }
@@ -555,29 +547,31 @@ void handleLabelingWindowKeyboardShortcuts(LabelingState& state) {
     if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
         const bool canSubmit = state.selectedTaskId >= 0 && anyEditorDirty(state) && !state.submitInProgress;
         if (canSubmit) {
-            beginSubmitLabelingAnnotation(state);
+            beginSubmitLabelingAnnotation(state, session);
         }
     }
     if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
         if (const auto nextId = nextLabelingTaskId(state, 1)) {
-            requestSelectLabelingTask(state, *nextId);
+            requestSelectLabelingTask(state, session, *nextId);
         }
     }
     if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
         if (const auto prevId = nextLabelingTaskId(state, -1)) {
-            requestSelectLabelingTask(state, *prevId);
+            requestSelectLabelingTask(state, session, *prevId);
         }
     }
 }
 
 } // namespace
 
-void drawLabelingWindow(bool* show, LabelingState& state) {
+void drawLabelingWindow(
+    bool* show, LabelingState& state, const LabelStudioSessionState& session,
+    const std::function<void()>& onOpenLabelStudioWindow) {
     if (!*show) {
         return;
     }
     ensureScratchFolder(state);
-    updateLabelingState(state);
+    updateLabelingState(state, session);
 
     if (!state.pendingLocalImagePath.empty() && state.pendingLocalImagePath != state.loadedLocalImagePath) {
         cv::Mat image = cv::imread(state.pendingLocalImagePath);
@@ -599,7 +593,7 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     if (state.focusTaskId >= 0) {
         const int taskId = state.focusTaskId;
         state.focusTaskId = -1;
-        requestSelectLabelingTask(state, taskId);
+        requestSelectLabelingTask(state, session, taskId);
     }
 
     if (!state.submitInProgress && !state.unsavedPromptOpen
@@ -623,14 +617,17 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     }
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-        handleLabelingWindowKeyboardShortcuts(state);
+        handleLabelingWindowKeyboardShortcuts(state, session);
     }
 
-    drawConnectionFields(state);
+    drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
+    if (!state.configStatus.empty()) {
+        ImGui::TextDisabled("%s", state.configStatus.c_str());
+    }
     ImGui::Separator();
 
     ImGui::BeginChild("LabelingBody", ImVec2(0, 0), false);
-    drawTaskListPanel(state);
+    drawTaskListPanel(state, session);
     ImGui::SameLine();
     const bool hasEditorPanel = state.boxEditor || state.choiceEditor || state.maskEditor;
     const float editorPanelWidth = 240.0f;
@@ -670,7 +667,7 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     const bool canSubmit = state.selectedTaskId >= 0 && anyEditorDirty(state) && !state.submitInProgress;
     ImGui::BeginDisabled(!canSubmit);
     if (ImGui::Button("Submit")) {
-        beginSubmitLabelingAnnotation(state);
+        beginSubmitLabelingAnnotation(state, session);
     }
     ImGui::EndDisabled();
     if (!state.submitStatus.empty()) {
@@ -684,7 +681,7 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
     if (ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("This task has unsaved edits.");
         if (ImGui::Button("Save")) {
-            confirmSaveAndSwitchTask(state);
+            confirmSaveAndSwitchTask(state, session);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -692,7 +689,7 @@ void drawLabelingWindow(bool* show, LabelingState& state) {
             // confirmDiscardAndSwitchTask clears unsavedPromptAction, so capture
             // whether this was a pending window-close before calling it.
             const bool wasClosingWindow = state.unsavedPromptAction == LabelingUnsavedPromptAction::CloseWindow;
-            confirmDiscardAndSwitchTask(state);
+            confirmDiscardAndSwitchTask(state, session);
             if (wasClosingWindow) {
                 *show = false;
             }
