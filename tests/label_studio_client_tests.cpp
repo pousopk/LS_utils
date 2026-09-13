@@ -270,6 +270,49 @@ void test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey() {
     CHECK(selectAllTaskSummaries(tasks, "image").empty());
 }
 
+void test_parseLabelStudioProjects_bareArray() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "title": "Detection Project"},
+        {"id": 2, "title": "Classification Project"}
+    ])");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 2);
+    CHECK(projects[0].id == 1);
+    CHECK(projects[0].title == "Detection Project");
+    CHECK(projects[1].id == 2);
+    CHECK(projects[1].title == "Classification Project");
+}
+
+void test_parseLabelStudioProjects_wrappedInResults() {
+    const auto json = nlohmann::json::parse(R"({
+        "count": 1,
+        "next": null,
+        "results": [{"id": 7, "title": "Wrapped Project"}]
+    })");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 1);
+    CHECK(projects[0].id == 7);
+    CHECK(projects[0].title == "Wrapped Project");
+}
+
+void test_parseLabelStudioProjects_skipsEntriesMissingIdOrTitle() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "title": "Has Both"},
+        {"title": "Missing Id"},
+        {"id": 2},
+        {"id": 3, "title": "Has Both Too"}
+    ])");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 2);
+    CHECK(projects[0].id == 1);
+    CHECK(projects[1].id == 3);
+}
+
+void test_parseLabelStudioProjects_notAnArrayReturnsEmpty() {
+    const auto json = nlohmann::json::parse(R"({"detail": "not found"})");
+    CHECK(parseLabelStudioProjects(json).empty());
+}
+
 void test_parseLabelStudioTaskDetail_withAnnotationAndPrediction() {
     const auto task = nlohmann::json::parse(R"({
         "id": 5,
@@ -570,6 +613,10 @@ int main() {
     test_selectAllTaskSummaries_flagsAnnotationsAndPredictions();
     test_selectAllTaskSummaries_fallsBackToArrayLengths();
     test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey();
+    test_parseLabelStudioProjects_bareArray();
+    test_parseLabelStudioProjects_wrappedInResults();
+    test_parseLabelStudioProjects_skipsEntriesMissingIdOrTitle();
+    test_parseLabelStudioProjects_notAnArrayReturnsEmpty();
     test_parseLabelStudioTaskDetail_withAnnotationAndPrediction();
     test_parseLabelStudioTaskDetail_noAnnotationOrPrediction();
     test_parseLabelStudioTaskDetail_missingImageKeyIsError();

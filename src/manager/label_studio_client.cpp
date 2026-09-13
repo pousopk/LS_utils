@@ -248,6 +248,89 @@ LabelStudioProjectConfig fetchLabelStudioProjectConfigDetailed(
     }
 }
 
+std::vector<LabelStudioProjectSummary> parseLabelStudioProjects(const nlohmann::json& projectsJson) {
+    std::vector<LabelStudioProjectSummary> out;
+
+    const nlohmann::json* items = &projectsJson;
+    if (projectsJson.is_object() && projectsJson.contains("results") && projectsJson["results"].is_array()) {
+        items = &projectsJson["results"];
+    }
+    if (!items->is_array()) {
+        return out;
+    }
+
+    for (const auto& item : *items) {
+        if (!item.is_object() || !item.contains("id") || !item.contains("title")) {
+            continue;
+        }
+        if (!item["id"].is_number_integer() || !item["title"].is_string()) {
+            continue;
+        }
+        LabelStudioProjectSummary summary;
+        summary.id = item["id"].get<int>();
+        summary.title = item["title"].get<std::string>();
+        out.push_back(summary);
+    }
+    return out;
+}
+
+LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl, const std::string& apiToken) {
+    LabelStudioProjectListResult out;
+    nlohmann::json allProjects = nlohmann::json::array();
+    const int pageSize = 200;
+
+    for (int page = 1; page <= 1000; ++page) {
+        const std::string url = normalizeBaseUrl(baseUrl) + "/api/projects/?page=" + std::to_string(page)
+            + "&page_size=" + std::to_string(pageSize);
+
+        std::string responseBody;
+        long httpCode = 0;
+        std::string networkError;
+        if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+            out.error = networkError;
+            return out;
+        }
+        if (httpCode < 200 || httpCode >= 300) {
+            out.error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
+            return out;
+        }
+
+        nlohmann::json parsed;
+        try {
+            parsed = nlohmann::json::parse(responseBody);
+        } catch (const nlohmann::json::parse_error&) {
+            out.error = "Failed to parse project list response";
+            return out;
+        }
+
+        const nlohmann::json* pageItems = &parsed;
+        bool hasMore = false;
+        if (parsed.is_object()) {
+            if (parsed.contains("results") && parsed["results"].is_array()) {
+                pageItems = &parsed["results"];
+            }
+            if (parsed.contains("next") && !parsed["next"].is_null()) {
+                hasMore = true;
+            }
+        }
+        if (!pageItems->is_array()) {
+            break;
+        }
+        for (const auto& item : *pageItems) {
+            allProjects.push_back(item);
+        }
+        if (pageItems->empty() || pageItems->size() < static_cast<size_t>(pageSize)) {
+            hasMore = false;
+        }
+        if (!hasMore) {
+            break;
+        }
+    }
+
+    out.projects = parseLabelStudioProjects(allProjects);
+    return out;
+}
+
 std::vector<int> selectMostRecentTaskIds(const nlohmann::json& tasksJson, size_t count) {
     const nlohmann::json* tasks = &tasksJson;
     if (tasksJson.is_object() && tasksJson.contains("tasks") && tasksJson["tasks"].is_array()) {

@@ -150,6 +150,30 @@ LabelStudioProjectConfig parseLabelStudioProjectConfigXml(const std::string& lab
 LabelStudioProjectConfig fetchLabelStudioProjectConfigDetailed(
     const std::string& baseUrl, int projectId, const std::string& apiToken);
 
+struct LabelStudioProjectSummary {
+    int id = 0;
+    std::string title;
+};
+
+// Pure function: parses a Label Studio projects-list API response --
+// handling both a bare JSON array and an object with a "results" array
+// (Label Studio's DRF-paginated shape, same tolerance this file already
+// applies to the tasks-list response) -- into project summaries. Entries
+// missing `id` (as an integer) or `title` (as a string) are skipped.
+std::vector<LabelStudioProjectSummary> parseLabelStudioProjects(const nlohmann::json& projectsJson);
+
+struct LabelStudioProjectListResult {
+    std::vector<LabelStudioProjectSummary> projects;
+    std::string error;   // set only on a hard failure (network, non-2xx, unparseable body)
+};
+
+// Fetches every project visible to this API token via GET
+// {baseUrl}/api/projects/, paginating exactly like
+// fetchAllLabelStudioTasksRaw (page/page_size params, following `next`
+// until exhausted or a short page is seen), then parses the accumulated
+// raw array with parseLabelStudioProjects.
+LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl, const std::string& apiToken);
+
 // Pure function: parses a Label Studio tasks-list API response --
 // handling both a bare JSON array and an object with a "tasks" array,
 // since this varies across Label Studio versions -- and returns the
