@@ -54,16 +54,15 @@ void buildResultGroups(TimestampSearchState& state, const TimestampSearchRunResu
     }
 }
 
-std::string buildAutoFetchKey(const TimestampSearchState& state) {
-    return state.labelStudioBaseUrl + "|" + std::to_string(state.labelStudioProjectId) + "|"
-        + state.labelStudioApiToken;
+std::string buildAutoFetchKey(const LabelStudioSessionState& session) {
+    return session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
 }
 
-void syncAutoFetch(TimestampSearchState& state) {
-    if (state.labelStudioBaseUrl.empty() || state.labelStudioProjectId <= 0 || state.labelStudioApiToken.empty()) {
+void syncAutoFetch(TimestampSearchState& state, const LabelStudioSessionState& session) {
+    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
         return;
     }
-    const std::string key = buildAutoFetchKey(state);
+    const std::string key = buildAutoFetchKey(session);
     if (key == state.lastAutoFetchKey) {
         return;
     }
@@ -73,7 +72,7 @@ void syncAutoFetch(TimestampSearchState& state) {
     // which this feature uses -- only dataImageKey matters here, and its
     // extraction doesn't depend on this flag.
     const LabelStudioLabelingConfig config = fetchLabelStudioLabelingConfig(
-        state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, /*isDetection=*/true);
+        session.baseUrl, session.activeProjectId, session.apiToken, /*isDetection=*/true);
     if (config.error.empty()) {
         state.labelStudioDataImageKey = config.dataImageKey;
         state.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
@@ -84,7 +83,7 @@ void syncAutoFetch(TimestampSearchState& state) {
 
 } // namespace
 
-void startTimestampSearch(TimestampSearchState& state) {
+void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionState& session) {
     std::vector<TimestampMatchQuery> queries;
     std::vector<TimestampSearchEntry> searchedEntries;
     for (const auto& entry : state.entries) {
@@ -110,9 +109,9 @@ void startTimestampSearch(TimestampSearchState& state) {
     std::filesystem::create_directories(scratchFolder, ec);
 
     TimestampSearchRunConfig config;
-    config.labelStudioBaseUrl = state.labelStudioBaseUrl;
-    config.labelStudioProjectId = state.labelStudioProjectId;
-    config.labelStudioApiToken = state.labelStudioApiToken;
+    config.labelStudioBaseUrl = session.baseUrl;
+    config.labelStudioProjectId = session.activeProjectId;
+    config.labelStudioApiToken = session.apiToken;
     config.labelStudioDataImageKey = state.labelStudioDataImageKey;
     config.queries = std::move(queries);
     config.scratchFolderPath = scratchFolder;
@@ -121,7 +120,7 @@ void startTimestampSearch(TimestampSearchState& state) {
     state.runState = TimestampSearchRunState::Running;
 }
 
-void updateTimestampSearchState(TimestampSearchState& state) {
+void updateTimestampSearchState(TimestampSearchState& state, const LabelStudioSessionState& session) {
     if (state.runState == TimestampSearchRunState::Running) {
         state.lastProgress = state.worker.progress();
 
@@ -136,5 +135,5 @@ void updateTimestampSearchState(TimestampSearchState& state) {
         }
     }
 
-    syncAutoFetch(state);
+    syncAutoFetch(state, session);
 }

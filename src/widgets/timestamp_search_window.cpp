@@ -2,6 +2,7 @@
 
 #include "manager/app_runtime.hpp"
 #include "manager/label_studio_client.hpp"
+#include "widgets/label_studio_window.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -9,15 +10,6 @@
 #include <ctime>
 
 namespace {
-
-void drawConnectionFields(TimestampSearchState& state) {
-    ImGui::InputText("Label Studio URL", &state.labelStudioBaseUrl);
-    ImGui::InputInt("Project ID", &state.labelStudioProjectId);
-    ImGui::InputText("API Token", &state.labelStudioApiToken, ImGuiInputTextFlags_Password);
-    if (!state.labelStudioAutoFetchStatus.empty()) {
-        ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
-    }
-}
 
 void drawEntryList(TimestampSearchState& state) {
     ImGui::InputInt("Tolerance (+/- minutes)", &state.toleranceMinutes);
@@ -55,7 +47,7 @@ void drawEntryList(TimestampSearchState& state) {
     ImGui::EndChild();
 }
 
-void drawSearchBar(TimestampSearchState& state) {
+void drawSearchBar(TimestampSearchState& state, const LabelStudioSessionState& session) {
     ImGui::Separator();
     if (state.runState == TimestampSearchRunState::Running) {
         if (!state.lastProgress.phaseLabel.empty()) {
@@ -82,11 +74,11 @@ void drawSearchBar(TimestampSearchState& state) {
             break;
         }
     }
-    const bool canSearch = anyValidEntry && !state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0
-        && !state.labelStudioApiToken.empty();
+    const bool canSearch = anyValidEntry && !session.baseUrl.empty() && session.activeProjectId > 0
+        && !session.apiToken.empty();
     ImGui::BeginDisabled(!canSearch);
     if (ImGui::Button("Search")) {
-        startTimestampSearch(state);
+        startTimestampSearch(state, session);
     }
     ImGui::EndDisabled();
     if (!canSearch) {
@@ -94,7 +86,8 @@ void drawSearchBar(TimestampSearchState& state) {
     }
 }
 
-void drawResults(TimestampSearchState& state, const LabelTaskCallback& onLabelTask) {
+void drawResults(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask) {
     if (!state.resultError.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.resultError.c_str());
         return;
@@ -138,9 +131,7 @@ void drawResults(TimestampSearchState& state, const LabelTaskCallback& onLabelTa
             ImGui::Text("Created: %s UTC", timeBuf);
             ImGui::Text("Delta: %+lld sec", candidateView.candidate.deltaSeconds);
             if (ImGui::SmallButton("Label")) {
-                onLabelTask(
-                    state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken,
-                    candidateView.candidate.taskId);
+                onLabelTask(session.baseUrl, session.activeProjectId, session.apiToken, candidateView.candidate.taskId);
             }
             ImGui::EndGroup();
             ImGui::PopID();
@@ -150,7 +141,9 @@ void drawResults(TimestampSearchState& state, const LabelTaskCallback& onLabelTa
 
 } // namespace
 
-void drawTimestampSearchWindow(bool* show, TimestampSearchState& state, const LabelTaskCallback& onLabelTask) {
+void drawTimestampSearchWindow(
+    bool* show, TimestampSearchState& state, const LabelStudioSessionState& session,
+    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
     if (!*show) {
         return;
     }
@@ -161,13 +154,16 @@ void drawTimestampSearchWindow(bool* show, TimestampSearchState& state, const La
         return;
     }
 
-    drawConnectionFields(state);
+    drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
+    if (!state.labelStudioAutoFetchStatus.empty()) {
+        ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
+    }
     ImGui::Separator();
     drawEntryList(state);
-    drawSearchBar(state);
+    drawSearchBar(state, session);
 
     if (state.runState == TimestampSearchRunState::Complete) {
-        drawResults(state, onLabelTask);
+        drawResults(state, session, onLabelTask);
     }
 
     ImGui::End();

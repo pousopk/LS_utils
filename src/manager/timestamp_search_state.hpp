@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/label_studio_session.hpp"
 #include "manager/timestamp_search_worker.hpp"
 
 #include <GLFW/glfw3.h>
@@ -31,9 +32,6 @@ enum class TimestampSearchRunState {
 };
 
 struct TimestampSearchState {
-    std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
-    std::string labelStudioApiToken;
     std::string labelStudioDataImageKey;   // auto-fetched, see updateTimestampSearchState
     std::string lastAutoFetchKey;
     std::string labelStudioAutoFetchStatus;
@@ -60,13 +58,14 @@ struct TimestampSearchState {
 // excluded from this run) and state.toleranceMinutes, clears any previous
 // result and its GL textures, (re)creates the hidden scratch download
 // folder, and starts state.worker. Sets state.runState = Running.
-void startTimestampSearch(TimestampSearchState& state);
+void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionState& session);
 
 // Called once per main-loop iteration while the window is open: polls
 // worker.progress()/tryTakeResult(); on completion, builds resultGroups
 // (loading one GL texture per candidate via cv::imread + uploadFrameToTexture)
 // or sets resultError. Also lazily auto-fetches labelStudioDataImageKey
-// from the Label Studio project once the connection fields are all set,
-// via fetchLabelStudioLabelingConfig, re-fetching only when
-// (baseUrl, projectId, apiToken) actually changes.
-void updateTimestampSearchState(TimestampSearchState& state);
+// from the Label Studio project once session's connection fields are all
+// set, via fetchLabelStudioLabelingConfig, re-fetching only when
+// (session.baseUrl, session.activeProjectId, session.apiToken) actually
+// changes.
+void updateTimestampSearchState(TimestampSearchState& state, const LabelStudioSessionState& session);
