@@ -3,6 +3,7 @@
 #include "manager/app_runtime.hpp"
 #include "manager/label_studio_client.hpp"
 #include "widgets/label_studio_window.hpp"
+#include "widgets/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -110,13 +111,7 @@ void drawResults(
                 const ImVec2 size =
                     fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 160.0f, 160.0f);
                 ImGui::Image((void*)(intptr_t)candidateView.texture, size);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-                    ImGui::BeginTooltip();
-                    const ImVec2 largeSize =
-                        fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 480.0f, 480.0f);
-                    ImGui::Image((void*)(intptr_t)candidateView.texture, largeSize);
-                    ImGui::EndTooltip();
-                }
+                drawHoverEnlargedImage(candidateView.texture, candidateView.textureWidth, candidateView.textureHeight, size);
             } else {
                 ImGui::TextDisabled("(image unavailable)");
             }

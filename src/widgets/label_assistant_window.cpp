@@ -5,6 +5,7 @@
 #include "widgets/file_browser_utils.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
+#include "widgets/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -263,8 +264,10 @@ void drawSelectedImageDetail(LabelAssistantState& state) {
     }
 
     if (state.previewTexture != 0 && state.previewTextureWidth > 0 && state.previewTextureHeight > 0) {
-        const ImVec2 size = fitImageToRegion(state.previewTextureWidth, state.previewTextureHeight, 500.0f, 300.0f);
+        const float maxWidth = ImGui::GetContentRegionAvail().x;
+        const ImVec2 size = fitImageToRegion(state.previewTextureWidth, state.previewTextureHeight, maxWidth, 300.0f);
         ImGui::Image((void*)(intptr_t)state.previewTexture, size);
+        drawHoverEnlargedImage(state.previewTexture, state.previewTextureWidth, state.previewTextureHeight, size);
     } else {
         ImGui::TextDisabled("No preview.");
     }

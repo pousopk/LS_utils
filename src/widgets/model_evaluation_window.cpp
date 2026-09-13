@@ -4,6 +4,7 @@
 #include "widgets/file_browser_utils.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
+#include "widgets/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -804,6 +805,7 @@ void drawSelectedImageDetail(ModelEvaluationState& state) {
             const ImVec2 size =
                 fitImageToRegion(preview.previewTextureWidth, preview.previewTextureHeight, maxWidth, 520.0f);
             ImGui::Image((void*)(intptr_t)preview.previewTexture, size);
+            drawHoverEnlargedImage(preview.previewTexture, preview.previewTextureWidth, preview.previewTextureHeight, size);
         } else {
             ImGui::TextDisabled("No preview.");
         }
