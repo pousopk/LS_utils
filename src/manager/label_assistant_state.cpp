@@ -31,7 +31,7 @@ std::string labelAssistantScratchFolder() {
 
 } // namespace
 
-void startLabelAssistantRun(LabelAssistantState& state) {
+void startLabelAssistantRun(LabelAssistantState& state, const LabelStudioSessionState& session) {
     LabelAssistantRunConfig config;
     config.mode = state.taskMode;
     config.detectionModel = state.modelConfig.detectionModel;
@@ -46,9 +46,9 @@ void startLabelAssistantRun(LabelAssistantState& state) {
         std::filesystem::remove_all(scratchFolder, ec);
         std::filesystem::create_directories(scratchFolder, ec);
 
-        config.labelStudioBaseUrl = state.labelStudioBaseUrl;
-        config.labelStudioProjectId = state.labelStudioProjectId;
-        config.labelStudioApiToken = state.labelStudioApiToken;
+        config.labelStudioBaseUrl = session.baseUrl;
+        config.labelStudioProjectId = session.activeProjectId;
+        config.labelStudioApiToken = session.apiToken;
         config.labelStudioDataImageKey = state.labelStudioDataImageKey;
         config.scratchFolderPath = scratchFolder;
         state.imageFolderPath = scratchFolder;
@@ -115,16 +115,16 @@ void syncLabelAssistantSelectedPreview(LabelAssistantState& state) {
     uploadFrameToTexture(state.previewTexture, toUpload, state.previewTextureWidth, state.previewTextureHeight);
 }
 
-std::string buildAutoFetchKey(const LabelAssistantState& state) {
-    return state.labelStudioBaseUrl + "|" + std::to_string(state.labelStudioProjectId) + "|"
-        + state.labelStudioApiToken + "|" + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
+std::string buildAutoFetchKey(const LabelAssistantState& state, const LabelStudioSessionState& session) {
+    return session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken + "|"
+        + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
 }
 
-void syncLabelAssistantAutoFetch(LabelAssistantState& state) {
-    if (state.labelStudioBaseUrl.empty() || state.labelStudioProjectId <= 0 || state.labelStudioApiToken.empty()) {
+void syncLabelAssistantAutoFetch(LabelAssistantState& state, const LabelStudioSessionState& session) {
+    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
         return;
     }
-    const std::string key = buildAutoFetchKey(state);
+    const std::string key = buildAutoFetchKey(state, session);
     if (key == state.lastAutoFetchKey) {
         return;
     }
@@ -132,7 +132,7 @@ void syncLabelAssistantAutoFetch(LabelAssistantState& state) {
 
     const bool isDetection = state.taskMode == ComparisonTaskMode::Detection;
     const LabelStudioLabelingConfig config = fetchLabelStudioLabelingConfig(
-        state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, isDetection);
+        session.baseUrl, session.activeProjectId, session.apiToken, isDetection);
 
     if (config.error.empty()) {
         state.labelFromName = config.fromName;
@@ -146,7 +146,7 @@ void syncLabelAssistantAutoFetch(LabelAssistantState& state) {
 
 } // namespace
 
-void updateLabelAssistantState(LabelAssistantState& state) {
+void updateLabelAssistantState(LabelAssistantState& state, const LabelStudioSessionState& session) {
     if (state.runState == LabelAssistantRunState::Running) {
         state.lastProgress = state.worker.progress();
 
@@ -161,7 +161,7 @@ void updateLabelAssistantState(LabelAssistantState& state) {
         }
     }
 
-    syncLabelAssistantAutoFetch(state);
+    syncLabelAssistantAutoFetch(state, session);
 
     syncLabelAssistantSelectedPreview(state);
 }
@@ -199,7 +199,7 @@ std::vector<DraftPrediction> buildDraftPredictions(const LabelAssistantState& st
 
 } // namespace
 
-void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state) {
+void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const LabelStudioSessionState& session) {
     const std::vector<DraftPrediction> draftPredictions = buildDraftPredictions(state);
 
     if (state.sourceMode == LabelAssistantSourceMode::LabelStudioProject) {
@@ -216,7 +216,7 @@ void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state) {
         }
 
         const LabelStudioAttachSummary summary =
-            attachPredictionsToKnownTasks(state.labelStudioBaseUrl, state.labelStudioApiToken, predictions);
+            attachPredictionsToKnownTasks(session.baseUrl, session.apiToken, predictions);
 
         state.exportStatus = "Created " + std::to_string(summary.created) + ", failed "
             + std::to_string(summary.failed) + (unresolved > 0 ? ", unresolved " + std::to_string(unresolved) : "");
@@ -230,8 +230,8 @@ void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state) {
             draft.filename, state.imageFolderPath + "/" + draft.filename, draft.resultAndScore});
     }
 
-    const LabelStudioPushSummary summary = pushDraftsAsNewLabelStudioTasks(
-        state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, predictions);
+    const LabelStudioPushSummary summary =
+        pushDraftsAsNewLabelStudioTasks(session.baseUrl, session.activeProjectId, session.apiToken, predictions);
 
     if (!summary.error.empty()) {
         state.exportStatus = summary.error;
