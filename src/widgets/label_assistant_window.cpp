@@ -244,7 +244,7 @@ void drawImageList(
         if (taskId.has_value()) {
             ImGui::SameLine();
             if (ImGui::SmallButton(("Label##" + entry->filename).c_str())) {
-                onLabelTask(session.baseUrl, session.activeProjectId, session.apiToken, *taskId);
+                onLabelTask(*taskId);
             }
         }
     }

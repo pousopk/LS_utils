@@ -131,7 +131,7 @@ void drawResults(
             ImGui::Text("Created: %s UTC", timeBuf);
             ImGui::Text("Delta: %+lld sec", candidateView.candidate.deltaSeconds);
             if (ImGui::SmallButton("Label")) {
-                onLabelTask(session.baseUrl, session.activeProjectId, session.apiToken, candidateView.candidate.taskId);
+                onLabelTask(candidateView.candidate.taskId);
             }
             ImGui::EndGroup();
             ImGui::PopID();
