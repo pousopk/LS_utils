@@ -10,6 +10,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 namespace {
@@ -64,24 +65,31 @@ constexpr float kHandleScreenRadius = 7.0f;   // hit-test + draw radius, in scre
 // Corner handle order: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right.
 constexpr int kHandleCount = 4;
 
-ImVec2 handleScreenPos(int handleIndex, const ImVec2& r0, const ImVec2& r1) {
-    switch (handleIndex) {
-        case 0: return ImVec2(r0.x, r0.y);
-        case 1: return ImVec2(r1.x, r0.y);
-        case 2: return ImVec2(r0.x, r1.y);
-        default: return ImVec2(r1.x, r1.y);
-    }
-}
+// Maps a handle index (0=TL,1=TR,2=BL,3=BR) to its position in
+// rotatedBoxCorners' perimeter-walk order (TL,TR,BR,BL) -- the two orders
+// agree everywhere except indices 2 and 3.
+constexpr int kHandleToCornerIndex[kHandleCount] = {0, 1, 3, 2};
 
-// The box corner that stays fixed while `handleIndex` is dragged (the
-// corner diagonally opposite it).
-cv::Point handleAnchorPoint(int handleIndex, const cv::Rect& box) {
-    switch (handleIndex) {
-        case 0: return cv::Point(box.x + box.width, box.y + box.height);
-        case 1: return cv::Point(box.x, box.y + box.height);
-        case 2: return cv::Point(box.x + box.width, box.y);
-        default: return cv::Point(box.x, box.y);
+constexpr float kRotateHandleScreenOffset = 24.0f;   // screen pixels above the (rotated) top edge's midpoint
+constexpr int kRotateHandleIndex = 4;                // distinct from the 4 resize handles (0-3)
+
+// Screen-space position of the rotate handle: the midpoint of the top edge
+// (screenCorners[0]..screenCorners[1], i.e. TL..TR) offset outward along
+// that edge's own perpendicular, so the handle stays visually "attached"
+// to the box as it rotates rather than always pointing straight up.
+ImVec2 rotateHandleScreenPos(const ImVec2 screenCorners[4]) {
+    const ImVec2 mid((screenCorners[0].x + screenCorners[1].x) * 0.5f, (screenCorners[0].y + screenCorners[1].y) * 0.5f);
+    const ImVec2 edge(screenCorners[1].x - screenCorners[0].x, screenCorners[1].y - screenCorners[0].y);
+    const float edgeLen = std::sqrt(edge.x * edge.x + edge.y * edge.y);
+    if (edgeLen < 1.0f) {
+        return ImVec2(mid.x, mid.y - kRotateHandleScreenOffset);
     }
+    // Perpendicular to the edge, pointing away from the box (rotate -90 deg
+    // in screen space: (ex,ey) -> (ey,-ex) points "up" for an unrotated,
+    // left-to-right top edge -- verified visually in manual testing; flip
+    // to (-ey, ex) if it ever points into the box instead.
+    const ImVec2 perp(edge.y / edgeLen, -edge.x / edgeLen);
+    return ImVec2(mid.x + perp.x * kRotateHandleScreenOffset, mid.y + perp.y * kRotateHandleScreenOffset);
 }
 
 ImU32 toImU32(const LabelColor& color) {
@@ -91,13 +99,18 @@ ImU32 toImU32(const LabelColor& color) {
 struct BoxDragState {
     bool active = false;
     bool creatingNew = false;
-    int resizeHandle = -1;   // -1 = not resizing; else 0-3, see handleScreenPos/handleAnchorPoint
+    bool rotating = false;
+    int resizeHandle = -1;   // -1 = not resizing; else 0-3, see kHandleToCornerIndex/rotatedHandleAnchorPoint
     int startX = 0;
     int startY = 0;
     int offsetX = 0;
     int offsetY = 0;
-    int anchorX = 0;
-    int anchorY = 0;
+    float anchorImageX = 0.0f;         // resize anchor corner, image space (may be non-integer once rotated)
+    float anchorImageY = 0.0f;
+    float dragRotationDegrees = 0.0f;  // box's rotation, captured at resize-drag-start (fixed for the resize)
+    cv::Rect rotateStartBox;           // box as of rotate-drag-start (fixed reference, not updated mid-drag)
+    float rotateStartRotationDegrees = 0.0f;
+    float rotateStartAngleRadians = 0.0f;   // atan2(mouse - center) at rotate-drag-start
 };
 
 void drawBoxOverlay(const BoxLabelEditorState& editor, int imageWidth, int imageHeight) {
@@ -116,19 +129,36 @@ void drawBoxOverlay(const BoxLabelEditorState& editor, int imageWidth, int image
 
     for (int i = 0; i < static_cast<int>(editor.boxes.size()); ++i) {
         const auto& box = editor.boxes[i].box;
-        const ImVec2 r0(imageMin.x + sx * box.x, imageMin.y + sy * box.y);
-        const ImVec2 r1(imageMin.x + sx * (box.x + box.width), imageMin.y + sy * (box.y + box.height));
+        const float rotationDegrees = editor.boxes[i].rotationDegrees;
         const bool isSelected = i == editor.selectedBoxIndex;
         const ImU32 color = toImU32(colorForClassName(editor.boxes[i].className));
-        ImGui::GetWindowDrawList()->AddRect(r0, r1, color, 0.0f, 0, isSelected ? 3.0f : 2.0f);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(r0.x, r0.y - 14.0f), color, editor.boxes[i].className.c_str());
+        const auto corners = rotatedBoxCorners(box, rotationDegrees);
+        ImVec2 screenCorners[4];
+        for (int c = 0; c < 4; ++c) {
+            screenCorners[c] = ImVec2(imageMin.x + sx * corners[c].x, imageMin.y + sy * corners[c].y);
+        }
+
+        if (rotationDegrees == 0.0f) {
+            ImGui::GetWindowDrawList()->AddRect(
+                screenCorners[0], screenCorners[2], color, 0.0f, 0, isSelected ? 3.0f : 2.0f);
+        } else {
+            ImGui::GetWindowDrawList()->AddPolyline(
+                screenCorners, 4, color, ImDrawFlags_Closed, isSelected ? 3.0f : 2.0f);
+        }
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(screenCorners[0].x, screenCorners[0].y - 14.0f), color, editor.boxes[i].className.c_str());
 
         if (isSelected) {
             for (int h = 0; h < kHandleCount; ++h) {
-                const ImVec2 p = handleScreenPos(h, r0, r1);
-                ImGui::GetWindowDrawList()->AddCircleFilled(p, kHandleScreenRadius, IM_COL32(255, 255, 255, 255));
-                ImGui::GetWindowDrawList()->AddCircle(p, kHandleScreenRadius, IM_COL32(30, 30, 30, 255), 0, 2.0f);
+                const ImVec2& handlePos = screenCorners[kHandleToCornerIndex[h]];
+                ImGui::GetWindowDrawList()->AddCircleFilled(handlePos, kHandleScreenRadius, IM_COL32(255, 255, 255, 255));
+                ImGui::GetWindowDrawList()->AddCircle(handlePos, kHandleScreenRadius, IM_COL32(30, 30, 30, 255), 0, 2.0f);
             }
+            const ImVec2 rotateHandlePos = rotateHandleScreenPos(screenCorners);
+            const ImVec2 topMid((screenCorners[0].x + screenCorners[1].x) * 0.5f, (screenCorners[0].y + screenCorners[1].y) * 0.5f);
+            ImGui::GetWindowDrawList()->AddLine(topMid, rotateHandlePos, IM_COL32(255, 255, 255, 200), 1.5f);
+            ImGui::GetWindowDrawList()->AddCircleFilled(rotateHandlePos, kHandleScreenRadius, IM_COL32(120, 200, 255, 255));
+            ImGui::GetWindowDrawList()->AddCircle(rotateHandlePos, kHandleScreenRadius, IM_COL32(30, 30, 30, 255), 0, 2.0f);
         }
     }
 }
@@ -165,31 +195,60 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
 
         int handleHit = -1;
         if (editor.selectedBoxIndex >= 0 && editor.selectedBoxIndex < static_cast<int>(editor.boxes.size())) {
-            const auto& box = editor.boxes[editor.selectedBoxIndex].box;
-            const ImVec2 r0(imageMin.x + sx * box.x, imageMin.y + sy * box.y);
-            const ImVec2 r1(imageMin.x + sx * (box.x + box.width), imageMin.y + sy * (box.y + box.height));
+            const auto& selectedBox = editor.boxes[editor.selectedBoxIndex];
+            const auto corners = rotatedBoxCorners(selectedBox.box, selectedBox.rotationDegrees);
+            ImVec2 screenCorners[4];
+            for (int c = 0; c < 4; ++c) {
+                screenCorners[c] = ImVec2(imageMin.x + sx * corners[c].x, imageMin.y + sy * corners[c].y);
+            }
             for (int h = 0; h < kHandleCount; ++h) {
-                const ImVec2 p = handleScreenPos(h, r0, r1);
-                const float dx = mouse.x - p.x;
-                const float dy = mouse.y - p.y;
+                const ImVec2& corner = screenCorners[kHandleToCornerIndex[h]];
+                const float dx = mouse.x - corner.x;
+                const float dy = mouse.y - corner.y;
                 if ((dx * dx + dy * dy) <= (kHandleScreenRadius * kHandleScreenRadius)) {
                     handleHit = h;
                     break;
                 }
             }
+            if (handleHit < 0) {
+                const ImVec2 rotateHandlePos = rotateHandleScreenPos(screenCorners);
+                const float dx = mouse.x - rotateHandlePos.x;
+                const float dy = mouse.y - rotateHandlePos.y;
+                if ((dx * dx + dy * dy) <= (kHandleScreenRadius * kHandleScreenRadius)) {
+                    handleHit = kRotateHandleIndex;
+                }
+            }
         }
 
-        if (handleHit >= 0) {
-            const cv::Point anchor = handleAnchorPoint(handleHit, editor.boxes[editor.selectedBoxIndex].box);
+        if (handleHit == kRotateHandleIndex) {
+            const auto& selectedBox = editor.boxes[editor.selectedBoxIndex];
+            const cv::Point2f localCenter(selectedBox.box.width / 2.0f, selectedBox.box.height / 2.0f);
+            const cv::Point2f pivot(static_cast<float>(selectedBox.box.x), static_cast<float>(selectedBox.box.y));
+            const cv::Point2f center = rotatePointClockwise(pivot + localCenter, pivot, selectedBox.rotationDegrees);
             drag.active = true;
             drag.creatingNew = false;
+            drag.resizeHandle = -1;
+            drag.rotating = true;
+            drag.rotateStartBox = selectedBox.box;
+            drag.rotateStartRotationDegrees = selectedBox.rotationDegrees;
+            drag.rotateStartAngleRadians = std::atan2(
+                static_cast<float>(startY) - center.y, static_cast<float>(startX) - center.x);
+        } else if (handleHit >= 0) {
+            const auto& selectedBox = editor.boxes[editor.selectedBoxIndex];
+            const cv::Point2f anchor = rotatedHandleAnchorPoint(handleHit, selectedBox.box, selectedBox.rotationDegrees);
+            drag.active = true;
+            drag.creatingNew = false;
+            drag.rotating = false;
             drag.resizeHandle = handleHit;
-            drag.anchorX = anchor.x;
-            drag.anchorY = anchor.y;
+            drag.anchorImageX = anchor.x;
+            drag.anchorImageY = anchor.y;
+            drag.dragRotationDegrees = selectedBox.rotationDegrees;
         } else {
             int hitIndex = -1;
             for (int i = 0; i < static_cast<int>(editor.boxes.size()); ++i) {
-                if (editor.boxes[i].box.contains(cv::Point(startX, startY))) {
+                if (rotatedBoxContainsPoint(
+                        editor.boxes[i].box, editor.boxes[i].rotationDegrees,
+                        cv::Point2f(static_cast<float>(startX), static_cast<float>(startY)))) {
                     hitIndex = i;
                     break;
                 }
@@ -230,11 +289,22 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
             box.y = std::min(drag.startY, currentY);
             box.width = std::abs(currentX - drag.startX) + 1;
             box.height = std::abs(currentY - drag.startY) + 1;
+        } else if (drag.rotating) {
+            const cv::Point2f localCenter(drag.rotateStartBox.width / 2.0f, drag.rotateStartBox.height / 2.0f);
+            const cv::Point2f pivot(
+                static_cast<float>(drag.rotateStartBox.x), static_cast<float>(drag.rotateStartBox.y));
+            const cv::Point2f center =
+                rotatePointClockwise(pivot + localCenter, pivot, drag.rotateStartRotationDegrees);
+            const float currentAngle =
+                std::atan2(static_cast<float>(currentY) - center.y, static_cast<float>(currentX) - center.x);
+            const RotatedBoxAngleDrag rotated = rotateBoxAroundCenter(
+                drag.rotateStartBox, drag.rotateStartRotationDegrees, drag.rotateStartAngleRadians, currentAngle);
+            box = rotated.box;
+            editor.boxes[editor.selectedBoxIndex].rotationDegrees = rotated.rotationDegrees;
         } else if (drag.resizeHandle >= 0) {
-            box.x = std::min(drag.anchorX, currentX);
-            box.y = std::min(drag.anchorY, currentY);
-            box.width = std::abs(currentX - drag.anchorX) + 1;
-            box.height = std::abs(currentY - drag.anchorY) + 1;
+            box = resizeRotatedBox(
+                drag.dragRotationDegrees, cv::Point2f(drag.anchorImageX, drag.anchorImageY),
+                cv::Point2f(static_cast<float>(currentX), static_cast<float>(currentY)));
         } else {
             box.x = std::clamp(currentX - drag.offsetX, 0, imageWidth - box.width);
             box.y = std::clamp(currentY - drag.offsetY, 0, imageHeight - box.height);
@@ -244,6 +314,7 @@ void handleBoxDrag(BoxLabelEditorState& editor, int imageWidth, int imageHeight)
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             drag.active = false;
             drag.resizeHandle = -1;
+            drag.rotating = false;
         }
     }
 }

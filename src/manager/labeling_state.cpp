@@ -43,6 +43,94 @@ LabelColor colorForClassName(const std::string& className) {
     return color;
 }
 
+cv::Point2f rotatePointClockwise(cv::Point2f point, cv::Point2f pivot, float degrees) {
+    const double theta = static_cast<double>(degrees) * CV_PI / 180.0;
+    const double dx = static_cast<double>(point.x) - static_cast<double>(pivot.x);
+    const double dy = static_cast<double>(point.y) - static_cast<double>(pivot.y);
+    const double cosT = std::cos(theta);
+    const double sinT = std::sin(theta);
+    const double rx = dx * cosT - dy * sinT;
+    const double ry = dx * sinT + dy * cosT;
+    return cv::Point2f(
+        static_cast<float>(static_cast<double>(pivot.x) + rx), static_cast<float>(static_cast<double>(pivot.y) + ry));
+}
+
+std::array<cv::Point2f, 4> rotatedBoxCorners(const cv::Rect& box, float rotationDegrees) {
+    const cv::Point2f pivot(static_cast<float>(box.x), static_cast<float>(box.y));
+    const cv::Point2f topLeft = pivot;
+    const cv::Point2f topRight(static_cast<float>(box.x + box.width), static_cast<float>(box.y));
+    const cv::Point2f bottomRight(static_cast<float>(box.x + box.width), static_cast<float>(box.y + box.height));
+    const cv::Point2f bottomLeft(static_cast<float>(box.x), static_cast<float>(box.y + box.height));
+    return {
+        rotatePointClockwise(topLeft, pivot, rotationDegrees),
+        rotatePointClockwise(topRight, pivot, rotationDegrees),
+        rotatePointClockwise(bottomRight, pivot, rotationDegrees),
+        rotatePointClockwise(bottomLeft, pivot, rotationDegrees),
+    };
+}
+
+bool rotatedBoxContainsPoint(const cv::Rect& box, float rotationDegrees, cv::Point2f point) {
+    const cv::Point2f pivot(static_cast<float>(box.x), static_cast<float>(box.y));
+    const cv::Point2f local = rotatePointClockwise(point, pivot, -rotationDegrees);
+    return local.x >= static_cast<float>(box.x) && local.x <= static_cast<float>(box.x + box.width)
+        && local.y >= static_cast<float>(box.y) && local.y <= static_cast<float>(box.y + box.height);
+}
+
+cv::Point2f rotatedHandleAnchorPoint(int handleIndex, const cv::Rect& box, float rotationDegrees) {
+    cv::Point2f localAnchor;
+    switch (handleIndex) {
+        case 0: localAnchor = cv::Point2f(static_cast<float>(box.x + box.width), static_cast<float>(box.y + box.height)); break;
+        case 1: localAnchor = cv::Point2f(static_cast<float>(box.x), static_cast<float>(box.y + box.height)); break;
+        case 2: localAnchor = cv::Point2f(static_cast<float>(box.x + box.width), static_cast<float>(box.y)); break;
+        default: localAnchor = cv::Point2f(static_cast<float>(box.x), static_cast<float>(box.y)); break;
+    }
+    const cv::Point2f pivot(static_cast<float>(box.x), static_cast<float>(box.y));
+    return rotatePointClockwise(localAnchor, pivot, rotationDegrees);
+}
+
+cv::Rect resizeRotatedBox(float rotationDegrees, cv::Point2f anchorImage, cv::Point2f currentMouseImage) {
+    const cv::Point2f currentLocal =
+        rotatePointClockwise(currentMouseImage, anchorImage, -rotationDegrees) - anchorImage;
+    const float newLocalX = std::min(0.0f, currentLocal.x);
+    const float newLocalY = std::min(0.0f, currentLocal.y);
+    const float newWidth = std::abs(currentLocal.x) + 1.0f;
+    const float newHeight = std::abs(currentLocal.y) + 1.0f;
+
+    const cv::Point2f newPivot =
+        rotatePointClockwise(anchorImage + cv::Point2f(newLocalX, newLocalY), anchorImage, rotationDegrees);
+
+    cv::Rect result;
+    result.x = static_cast<int>(std::round(newPivot.x));
+    result.y = static_cast<int>(std::round(newPivot.y));
+    result.width = static_cast<int>(std::round(newWidth));
+    result.height = static_cast<int>(std::round(newHeight));
+    return result;
+}
+
+RotatedBoxAngleDrag rotateBoxAroundCenter(
+    const cv::Rect& originalBox, float startRotationDegrees, float startAngleRadians, float currentAngleRadians) {
+    const cv::Point2f pivot(static_cast<float>(originalBox.x), static_cast<float>(originalBox.y));
+    const cv::Point2f localCenter(originalBox.width / 2.0f, originalBox.height / 2.0f);
+    const cv::Point2f center = rotatePointClockwise(pivot + localCenter, pivot, startRotationDegrees);
+
+    const float deltaDegrees = (currentAngleRadians - startAngleRadians) * 180.0f / static_cast<float>(CV_PI);
+    const float newRotationDegrees = startRotationDegrees + deltaDegrees;
+
+    // Pure rotation of the center->pivot offset vector (rotating around the
+    // origin, not around a point) -- gives where the pivot must sit,
+    // relative to the fixed center, at the new angle.
+    const cv::Point2f rotatedCenterOffset =
+        rotatePointClockwise(localCenter, cv::Point2f(0.0f, 0.0f), newRotationDegrees);
+    const cv::Point2f newPivot = center - rotatedCenterOffset;
+
+    RotatedBoxAngleDrag out;
+    out.box = originalBox;
+    out.box.x = static_cast<int>(std::round(newPivot.x));
+    out.box.y = static_cast<int>(std::round(newPivot.y));
+    out.rotationDegrees = newRotationDegrees;
+    return out;
+}
+
 void resetLabelingEditorsFromConfig(LabelingState& state) {
     state.boxEditor.reset();
     state.choiceEditor.reset();

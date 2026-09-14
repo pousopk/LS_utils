@@ -9,6 +9,7 @@
 
 #include <opencv2/imgproc.hpp>
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -40,6 +41,65 @@ struct LabelColor {
 // isolation; the widget layer converts LabelColor to whatever pixel
 // format it needs (e.g. IM_COL32).
 LabelColor colorForClassName(const std::string& className);
+
+// Pure function: rotates `point` clockwise around `pivot` by `degrees`, in
+// this codebase's image-space convention (x right, y down) -- clockwise as
+// a viewer would see it on screen. The single primitive every other
+// rotation-aware box function is built from.
+cv::Point2f rotatePointClockwise(cv::Point2f point, cv::Point2f pivot, float degrees);
+
+// Pure function: the 4 corners of `box` (top-left, top-right,
+// bottom-right, bottom-left, in that order) after applying
+// `rotationDegrees` around the box's own pivot (box.x, box.y) -- the
+// top-left corner is always exactly (box.x, box.y) itself (rotating a
+// point around itself is a no-op); the other 3 corners move. Used for
+// drawing the rotated outline and for placing handles at their true
+// screen positions.
+std::array<cv::Point2f, 4> rotatedBoxCorners(const cv::Rect& box, float rotationDegrees);
+
+// Pure function: true if `point` (image space) falls inside `box` once
+// rotation is accounted for -- inverse-rotates `point` into the box's own
+// unrotated frame, then does the ordinary axis-aligned contains-check
+// there. Replaces a plain `box.contains(point)` hit-test for a box that
+// may be rotated.
+bool rotatedBoxContainsPoint(const cv::Rect& box, float rotationDegrees, cv::Point2f point);
+
+// Pure function: the diagonally-opposite corner of `box` from
+// `handleIndex` (0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right --
+// same convention as labeling_window.cpp's existing handle-index scheme),
+// rotated into image space around the box's own pivot. This is the corner
+// that must stay fixed on screen while `handleIndex` is dragged; callers
+// capture it once at drag-start and hold it fixed for the whole resize.
+cv::Point2f rotatedHandleAnchorPoint(int handleIndex, const cv::Rect& box, float rotationDegrees);
+
+// Pure function: resizes a box by dragging one corner to follow
+// `currentMouseImage`, given `anchorImage` (the screen-fixed opposite
+// corner, from rotatedHandleAnchorPoint, captured once at drag-start) and
+// `rotationDegrees` (fixed for the whole resize -- resizing never changes
+// the angle). Computes the result in the box's own rotated coordinate
+// frame (inverse-rotating the mouse position around the anchor, applying
+// the same min/abs logic an unrotated editor would, then rotating the
+// result back). Reduces exactly to the plain axis-aligned min/abs resize
+// when rotationDegrees == 0.0f. rotationDegrees itself is unchanged by
+// this function -- only x/y/width/height are returned.
+cv::Rect resizeRotatedBox(float rotationDegrees, cv::Point2f anchorImage, cv::Point2f currentMouseImage);
+
+struct RotatedBoxAngleDrag {
+    cv::Rect box;              // updated x, y (width/height unchanged from originalBox)
+    float rotationDegrees = 0.0f;
+};
+
+// Pure function: rotates `originalBox` (currently at `startRotationDegrees`)
+// so its on-screen center stays fixed while its angle changes by
+// (currentAngleRadians - startAngleRadians) -- both angles are
+// atan2(dy, dx) from the box's own center to a point (the mouse), in
+// image space, using this file's clockwise convention (consistent with
+// rotatePointClockwise). x/y (Label Studio's own pivot) are recomputed so
+// the center stays put -- only this function's caller decides what "the
+// box's center" and the two angles are (see labeling_window.cpp's rotate
+// drag); this function is pure algebra given them.
+RotatedBoxAngleDrag rotateBoxAroundCenter(
+    const cv::Rect& originalBox, float startRotationDegrees, float startAngleRadians, float currentAngleRadians);
 
 struct ChoiceLabelEditorState {
     std::string fromName;
