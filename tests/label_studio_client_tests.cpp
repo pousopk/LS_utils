@@ -360,6 +360,7 @@ void test_parseDetectionResultBoxes_convertsPercentToPixels() {
     CHECK(boxes[0].box.width == 100); // 50% of 200
     CHECK(boxes[0].box.height == 25); // 25% of 100
     CHECK(boxes[0].className == "Person");
+    CHECK(boxes[0].rotationDegrees == 0.0f); // absent in the JSON -- defaults to unrotated
 }
 
 void test_parseDetectionResultBoxes_filtersByFromNameAndType() {
@@ -372,13 +373,64 @@ void test_parseDetectionResultBoxes_filtersByFromNameAndType() {
     CHECK(parseDetectionResultBoxes(result, "label").empty());
 }
 
-void test_parseDetectionResultBoxes_skipsRotatedBox() {
+void test_parseDetectionResultBoxes_preservesRotation() {
     const auto result = nlohmann::json::parse(R"([
         {"type": "rectanglelabels", "from_name": "label", "to_name": "image",
          "original_width": 100, "original_height": 100,
          "value": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "rotation": 15.0, "rectanglelabels": ["Car"]}}
     ])");
-    CHECK(parseDetectionResultBoxes(result, "label").empty());
+    const auto boxes = parseDetectionResultBoxes(result, "label");
+    CHECK(boxes.size() == 1);
+    CHECK(boxes[0].rotationDegrees == 15.0f);
+}
+
+void test_parseLabelStudioExport_preservesRotation() {
+    // Real schema, verified against Label Studio's own docs.
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image": "http://x/opensource/label-studio/1.jpg"},
+        "annotations": [{"result": [{
+            "type": "rectanglelabels",
+            "value": {"x": 50.8, "y": 5.87, "width": 12.4, "height": 10.46, "rotation": 45.0, "rectanglelabels": ["Moonwalker"]},
+            "original_width": 600, "original_height": 403
+        }]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].boxes.size() == 1);
+    CHECK(result.images[0].boxes[0].rotationDegrees == 45.0f);
+}
+
+void test_buildDetectionPredictionResult_writesRotation() {
+    DraftDetectionLabel draft;
+    draft.imageFilename = "1.jpg";
+    draft.imageWidth = 200;
+    draft.imageHeight = 100;
+    DraftDetectionBox box;
+    box.box = cv::Rect(20, 20, 100, 25);
+    box.className = "Person";
+    box.confidence = 0.9f;
+    box.rotationDegrees = 30.0f;
+    draft.boxes.push_back(box);
+
+    const auto prediction = buildDetectionPredictionResult(draft, "label", "image");
+    CHECK(prediction.result.size() == 1);
+    CHECK(prediction.result[0]["value"]["rotation"].get<double>() == 30.0);
+}
+
+void test_buildDetectionPredictionResult_defaultsRotationToZero() {
+    DraftDetectionLabel draft;
+    draft.imageWidth = 200;
+    draft.imageHeight = 100;
+    DraftDetectionBox box;
+    box.box = cv::Rect(0, 0, 10, 10);
+    box.className = "Car";
+    draft.boxes.push_back(box);
+
+    const auto prediction = buildDetectionPredictionResult(draft, "label", "image");
+    CHECK(prediction.result.size() == 1);
+    CHECK(prediction.result[0]["value"]["rotation"].get<double>() == 0.0);
 }
 
 void test_parseChoiceResultLabel_findsMatchingChoice() {
@@ -622,7 +674,10 @@ int main() {
     test_parseLabelStudioTaskDetail_missingImageKeyIsError();
     test_parseDetectionResultBoxes_convertsPercentToPixels();
     test_parseDetectionResultBoxes_filtersByFromNameAndType();
-    test_parseDetectionResultBoxes_skipsRotatedBox();
+    test_parseDetectionResultBoxes_preservesRotation();
+    test_parseLabelStudioExport_preservesRotation();
+    test_buildDetectionPredictionResult_writesRotation();
+    test_buildDetectionPredictionResult_defaultsRotationToZero();
     test_parseChoiceResultLabel_findsMatchingChoice();
     test_parseChoiceResultLabel_noMatchReturnsNullopt();
     test_parseChoiceResultLabel_emptyResultReturnsNullopt();

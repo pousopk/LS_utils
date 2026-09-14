@@ -11,6 +11,10 @@
 struct GroundTruthBox {
     cv::Rect box;            // pixel coordinates, original image space
     std::string className;
+    // Degrees, clockwise, around box's top-left corner (box.x, box.y)
+    // pre-rotation -- Label Studio's own convention for RectangleLabels.
+    // 0.0 for an ordinary axis-aligned box.
+    float rotationDegrees = 0.0f;
 };
 
 struct ImageGroundTruth {
@@ -19,18 +23,16 @@ struct ImageGroundTruth {
     std::string classificationLabel;     // populated for classification ("choices") tasks (empty if none)
 
     // Whether this image actually had a "rectanglelabels"/"choices" result
-    // present, regardless of whether it produced usable data (e.g. a
-    // rotated box still sets hasDetectionAnnotation even though it's
-    // skipped from `boxes`). Distinguishes "labeled with zero objects"
-    // from "never labeled for this task type" -- an image can have both,
-    // one, or neither, independent of the other.
+    // present, regardless of whether it produced usable data. Distinguishes
+    // "labeled with zero objects" from "never labeled for this task type"
+    // -- an image can have both, one, or neither, independent of the other.
     bool hasDetectionAnnotation = false;
     bool hasClassificationAnnotation = false;
 };
 
 struct LabelStudioImportResult {
     std::vector<ImageGroundTruth> images;
-    int skippedCount = 0;   // rotated boxes, unrecognized image fields, unsupported result types, etc.
+    int skippedCount = 0;   // unrecognized image fields, unsupported result types, etc.
     std::string error;      // set only on a hard failure (unreadable file / not valid JSON / not an array)
 };
 
@@ -44,6 +46,14 @@ struct DraftDetectionBox {
     cv::Rect box;                 // pixel coordinates, original image space
     std::string className;
     float confidence = 0.0f;
+    // Degrees, clockwise, around box's top-left corner (box.x, box.y)
+    // pre-rotation -- Label Studio's own convention for RectangleLabels.
+    // 0.0 for an ordinary axis-aligned box. The Labeling window's box
+    // editor doesn't support drawing/editing at an angle yet, so any drag,
+    // resize, move, or new box created there resets this to 0.0 rather
+    // than silently keeping a stale angle that no longer matches what was
+    // actually edited.
+    float rotationDegrees = 0.0f;
 };
 
 struct DraftDetectionLabel {
@@ -83,8 +93,7 @@ PredictionResultAndScore buildDetectionPredictionResult(
 // `rectangleLabelsFromName` back into pixel-space boxes (using each
 // item's own original_width/original_height, converting its x/y/width/
 // height percentages back to pixels the same way parseLabelStudioExport
-// does). Items with a nonzero rotation are skipped (same as
-// parseLabelStudioExport -- this app doesn't support rotated boxes).
+// does), including its rotation (degrees, defaulting to 0.0 if absent).
 // confidence is not meaningful for a real annotation's box and is left at
 // its default (0.0f). Used to seed the box editor from an existing
 // annotation or prediction.

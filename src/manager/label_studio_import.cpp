@@ -142,10 +142,6 @@ LabelStudioImportResult parseLabelStudioExport(const nlohmann::json& tasks) {
 
             if (type == "rectanglelabels") {
                 groundTruth.hasDetectionAnnotation = true;
-                if (value.contains("rotation") && value["rotation"].get<double>() != 0.0) {
-                    result.skippedCount++;
-                    continue;
-                }
                 if (!value.contains("rectanglelabels") || !value["rectanglelabels"].is_array()
                     || value["rectanglelabels"].empty()) {
                     result.skippedCount++;
@@ -166,6 +162,9 @@ LabelStudioImportResult parseLabelStudioExport(const nlohmann::json& tasks) {
                     static_cast<int>(std::round(value["width"].get<double>() / 100.0 * originalWidth)),
                     static_cast<int>(std::round(value["height"].get<double>() / 100.0 * originalHeight)));
                 box.className = value["rectanglelabels"][0].get<std::string>();
+                if (value.contains("rotation")) {
+                    box.rotationDegrees = static_cast<float>(value["rotation"].get<double>());
+                }
                 groundTruth.boxes.push_back(std::move(box));
             } else if (type == "choices") {
                 groundTruth.hasClassificationAnnotation = true;
@@ -238,7 +237,7 @@ PredictionResultAndScore buildDetectionPredictionResult(
         result["value"]["y"] = height > 0.0 ? (static_cast<double>(box.box.y) / height * 100.0) : 0.0;
         result["value"]["width"] = width > 0.0 ? (static_cast<double>(box.box.width) / width * 100.0) : 0.0;
         result["value"]["height"] = height > 0.0 ? (static_cast<double>(box.box.height) / height * 100.0) : 0.0;
-        result["value"]["rotation"] = 0;
+        result["value"]["rotation"] = box.rotationDegrees;
         result["value"]["rectanglelabels"] = nlohmann::json::array({box.className});
 
         results.push_back(std::move(result));
@@ -269,9 +268,6 @@ std::vector<DraftDetectionBox> parseDetectionResultBoxes(
             continue;
         }
         const auto& value = item["value"];
-        if (value.contains("rotation") && value["rotation"].get<double>() != 0.0) {
-            continue;
-        }
         if (!value.contains("rectanglelabels") || !value["rectanglelabels"].is_array() || value["rectanglelabels"].empty()) {
             continue;
         }
@@ -286,6 +282,9 @@ std::vector<DraftDetectionBox> parseDetectionResultBoxes(
             static_cast<int>(std::round(value["width"].get<double>() / 100.0 * originalWidth)),
             static_cast<int>(std::round(value["height"].get<double>() / 100.0 * originalHeight)));
         box.className = value["rectanglelabels"][0].get<std::string>();
+        if (value.contains("rotation")) {
+            box.rotationDegrees = static_cast<float>(value["rotation"].get<double>());
+        }
         boxes.push_back(std::move(box));
     }
 
