@@ -136,19 +136,9 @@ void drawResults(
 
 } // namespace
 
-void drawTimestampSearchWindow(
-    bool* show, TimestampSearchState& state, const LabelStudioSessionState& session,
-    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
-    if (!*show) {
-        return;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(700.0f, 800.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Find by Timestamp", show)) {
-        ImGui::End();
-        return;
-    }
-
+void drawTimestampSearchTabContent(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask,
+    const std::function<void()>& onOpenLabelStudioWindow) {
     drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
     if (!state.labelStudioAutoFetchStatus.empty()) {
         ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
@@ -160,6 +150,4 @@ void drawTimestampSearchWindow(
     if (state.runState == TimestampSearchRunState::Complete) {
         drawResults(state, session, onLabelTask);
     }
-
-    ImGui::End();
 }

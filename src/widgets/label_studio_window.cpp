@@ -1,5 +1,11 @@
 #include "widgets/label_studio_window.hpp"
 
+#include "manager/labeling_state.hpp"
+#include "widgets/AppUi.hpp"
+#include "widgets/label_assistant_window.hpp"
+#include "widgets/labeling_window.hpp"
+#include "widgets/timestamp_search_window.hpp"
+
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
@@ -22,17 +28,10 @@ void drawLabelStudioSessionSummary(
     }
 }
 
-void drawLabelStudioWindow(bool* show, LabelStudioSessionState& session) {
-    if (!*show) {
-        return;
-    }
+namespace {
 
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 360.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Label Studio", show)) {
-        ImGui::End();
-        return;
-    }
-
+// Content for the Connection tab: base URL/token, Connect, project list.
+void drawConnectionTabContent(LabelStudioSessionState& session) {
     ImGui::InputText("Base URL", &session.baseUrl);
     ImGui::InputText("API Token", &session.apiToken, ImGuiInputTextFlags_Password);
 
@@ -69,6 +68,76 @@ void drawLabelStudioWindow(bool* show, LabelStudioSessionState& session) {
             ImGui::EndChild();
             break;
         }
+    }
+}
+
+} // namespace
+
+void drawLabelStudioWindow(AppUi& ui) {
+    bool windowOpen = ui.showLabelStudioWindow;
+    if (!windowOpen) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(1200.0f, 900.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Label Studio", &windowOpen)) {
+        ImGui::End();
+        return;
+    }
+
+    // Closing the whole window while the Labeling tab has unsaved edits is
+    // the same hazard the standalone Labeling window used to guard against
+    // -- veto the close and let its own unsaved-changes prompt (rendered
+    // inside drawLabelingTabContent) decide what happens next.
+    if (!windowOpen && anyEditorDirty(ui.labelingState)) {
+        windowOpen = true;
+        ui.labelingState.unsavedPromptOpen = true;
+        ui.labelingState.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
+    }
+    ui.showLabelStudioWindow = windowOpen;
+
+    auto onLabelTask = [&ui](int taskId) { ui.openLabelingForTask(taskId); };
+    auto onOpenConnectionTab = [&ui] { ui.openLabelStudioTab(LabelStudioTab::Connection); };
+
+    if (ImGui::BeginTabBar("LabelStudioTabs")) {
+        ImGuiTabItemFlags connectionFlags = ImGuiTabItemFlags_None;
+        if (ui.pendingLabelStudioTab == LabelStudioTab::Connection) {
+            connectionFlags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Connection", nullptr, connectionFlags)) {
+            drawConnectionTabContent(ui.labelStudioSession);
+            ImGui::EndTabItem();
+        }
+
+        ImGuiTabItemFlags labelingFlags = ImGuiTabItemFlags_None;
+        if (ui.pendingLabelStudioTab == LabelStudioTab::Labeling) {
+            labelingFlags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Labeling", nullptr, labelingFlags)) {
+            drawLabelingTabContent(&ui.showLabelStudioWindow, ui.labelingState, ui.labelStudioSession, onOpenConnectionTab);
+            ImGui::EndTabItem();
+        }
+
+        ImGuiTabItemFlags labelAssistantFlags = ImGuiTabItemFlags_None;
+        if (ui.pendingLabelStudioTab == LabelStudioTab::LabelAssistant) {
+            labelAssistantFlags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Label Assistant", nullptr, labelAssistantFlags)) {
+            drawLabelAssistantTabContent(ui.labelAssistantState, ui.labelStudioSession, onLabelTask, onOpenConnectionTab);
+            ImGui::EndTabItem();
+        }
+
+        ImGuiTabItemFlags timestampSearchFlags = ImGuiTabItemFlags_None;
+        if (ui.pendingLabelStudioTab == LabelStudioTab::TimestampSearch) {
+            timestampSearchFlags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Find by Timestamp", nullptr, timestampSearchFlags)) {
+            drawTimestampSearchTabContent(ui.timestampSearchState, ui.labelStudioSession, onLabelTask, onOpenConnectionTab);
+            ImGui::EndTabItem();
+        }
+
+        ui.pendingLabelStudioTab.reset();
+        ImGui::EndTabBar();
     }
 
     ImGui::End();

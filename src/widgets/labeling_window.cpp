@@ -635,14 +635,10 @@ void handleLabelingWindowKeyboardShortcuts(LabelingState& state, const LabelStud
 
 } // namespace
 
-void drawLabelingWindow(
-    bool* show, LabelingState& state, const LabelStudioSessionState& session,
+void drawLabelingTabContent(
+    bool* mergedWindowOpen, LabelingState& state, const LabelStudioSessionState& session,
     const std::function<void()>& onOpenLabelStudioWindow) {
-    if (!*show) {
-        return;
-    }
     ensureScratchFolder(state);
-    updateLabelingState(state, session);
 
     if (!state.pendingLocalImagePath.empty() && state.pendingLocalImagePath != state.loadedLocalImagePath) {
         cv::Mat image = cv::imread(state.pendingLocalImagePath);
@@ -669,22 +665,8 @@ void drawLabelingWindow(
 
     if (!state.submitInProgress && !state.unsavedPromptOpen
         && state.unsavedPromptAction == LabelingUnsavedPromptAction::CloseWindow && state.submitStatus == "Saved.") {
-        *show = false;
+        *mergedWindowOpen = false;
         state.unsavedPromptAction = LabelingUnsavedPromptAction::None;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(1000.0f, 700.0f), ImGuiCond_FirstUseEver);
-    bool windowOpen = *show;
-    if (!ImGui::Begin("Labeling", &windowOpen)) {
-        ImGui::End();
-        return;
-    }
-    if (!windowOpen && anyEditorDirty(state)) {
-        *show = true; // veto the close; the prompt below decides what happens next
-        state.unsavedPromptOpen = true;
-        state.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
-    } else if (!windowOpen) {
-        *show = false;
     }
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
@@ -762,7 +744,7 @@ void drawLabelingWindow(
             const bool wasClosingWindow = state.unsavedPromptAction == LabelingUnsavedPromptAction::CloseWindow;
             confirmDiscardAndSwitchTask(state, session);
             if (wasClosingWindow) {
-                *show = false;
+                *mergedWindowOpen = false;
             }
             ImGui::CloseCurrentPopup();
         }
@@ -774,6 +756,4 @@ void drawLabelingWindow(
         }
         ImGui::EndPopup();
     }
-
-    ImGui::End();
 }
