@@ -10,6 +10,7 @@ struct PredictionRecord {
     float confidence = 0.0f;
     int imageIndex = 0;
     cv::Rect box;
+    float rotationDegrees = 0.0f;
 };
 
 } // namespace
@@ -20,7 +21,8 @@ DetectionMetrics computeDetectionMetrics(const std::vector<DetectionEvaluationIt
 
     for (size_t imgIdx = 0; imgIdx < items.size(); ++imgIdx) {
         for (const auto& det : items[imgIdx].predictions) {
-            predictionsByClass[det.className].push_back({det.confidence, static_cast<int>(imgIdx), det.box});
+            predictionsByClass[det.className].push_back(
+                {det.confidence, static_cast<int>(imgIdx), det.box, det.rotationDegrees});
         }
         for (const auto& gt : items[imgIdx].groundTruth) {
             groundTruthCountByClass[gt.className]++;
@@ -93,7 +95,9 @@ DetectionMetrics computeDetectionMetrics(const std::vector<DetectionEvaluationIt
                 if (usedGroundTruth[pred.imageIndex][gIdx]) {
                     continue;
                 }
-                const float iou = computeIoU(pred.box, items[pred.imageIndex].groundTruth[gIdx].box);
+                const float iou = computeRotatedIoU(
+                    pred.box, pred.rotationDegrees,
+                    items[pred.imageIndex].groundTruth[gIdx].box, items[pred.imageIndex].groundTruth[gIdx].rotationDegrees);
                 if (iou >= bestIoU) {
                     bestIoU = iou;
                     bestGtIdx = gIdx;

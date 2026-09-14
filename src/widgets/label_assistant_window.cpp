@@ -67,8 +67,8 @@ void drawModelConfig(LabelAssistantState& state) {
 
     const bool loadClicked = drawModelSlotConfigFields(
         state.modelConfig.onnxPath, state.modelConfig.classNamesPath, state.modelConfig.inputWidth,
-        state.modelConfig.inputHeight, confThreshold, nmsThreshold, state.modelConfig.autoDetectStatus,
-        state.modelConfig.loadError,
+        state.modelConfig.inputHeight, confThreshold, nmsThreshold, &state.modelConfig.isObbDetectionModel,
+        state.modelConfig.autoDetectStatus, state.modelConfig.loadError,
         [&state]() {
             state.filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
             state.filePickerOpen = true;
@@ -415,19 +415,9 @@ void drawFilePickerPopup(LabelAssistantState& state) {
 
 } // namespace
 
-void drawLabelAssistantWindow(
-    bool* show, LabelAssistantState& state, const LabelStudioSessionState& session,
-    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
-    if (!*show) {
-        return;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(1100.0f, 900.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Label Assistant", show)) {
-        ImGui::End();
-        return;
-    }
-
+void drawLabelAssistantTabContent(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask,
+    const std::function<void()>& onOpenLabelStudioWindow) {
     drawTaskModeToggle(state);
     ImGui::Separator();
 
@@ -459,8 +449,6 @@ void drawLabelAssistantWindow(
             drawExportSection(state, session, onOpenLabelStudioWindow);
         }
     }
-
-    ImGui::End();
 
     drawFolderPickerPopup(state);
     drawFilePickerPopup(state);

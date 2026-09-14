@@ -1,9 +1,12 @@
 #include "manager/yolo_inference.hpp"
 
+#include "manager/rotated_box_geometry.hpp"
+
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 LetterboxTransform computeLetterboxTransform(
     int origWidth, int origHeight, int targetWidth, int targetHeight, bool centerPadding) {
@@ -23,6 +26,24 @@ LetterboxTransform computeLetterboxTransform(
         transform.padY = 0.0f;
     }
     return transform;
+}
+
+ObbBox centerObbToTopLeftPivotBox(float cx, float cy, float w, float h, float rotationDegrees) {
+    const double theta = static_cast<double>(rotationDegrees) * CV_PI / 180.0;
+    const double cosT = std::cos(theta);
+    const double sinT = std::sin(theta);
+    const double localX = -static_cast<double>(w) / 2.0;
+    const double localY = -static_cast<double>(h) / 2.0;
+    const double rx = localX * cosT - localY * sinT;
+    const double ry = localX * sinT + localY * cosT;
+
+    ObbBox result;
+    result.box.x = static_cast<int>(std::round(static_cast<double>(cx) + rx));
+    result.box.y = static_cast<int>(std::round(static_cast<double>(cy) + ry));
+    result.box.width = static_cast<int>(std::round(w));
+    result.box.height = static_cast<int>(std::round(h));
+    result.rotationDegrees = rotationDegrees;
+    return result;
 }
 
 cv::Mat letterboxResize(
@@ -62,6 +83,29 @@ float computeIoU(const cv::Rect& a, const cv::Rect& b) {
         return 0.0f;
     }
     const float unionArea = static_cast<float>(a.area() + b.area()) - intersectionArea;
+    return unionArea > 0.0f ? intersectionArea / unionArea : 0.0f;
+}
+
+float computeRotatedIoU(
+    const cv::Rect& boxA, float rotationDegreesA, const cv::Rect& boxB, float rotationDegreesB) {
+    if (rotationDegreesA == 0.0f && rotationDegreesB == 0.0f) {
+        return computeIoU(boxA, boxB);
+    }
+
+    const auto cornersA = rotatedBoxCorners(boxA, rotationDegreesA);
+    const auto cornersB = rotatedBoxCorners(boxB, rotationDegreesB);
+    const std::vector<cv::Point2f> polyA(cornersA.begin(), cornersA.end());
+    const std::vector<cv::Point2f> polyB(cornersB.begin(), cornersB.end());
+
+    std::vector<cv::Point2f> intersection;
+    const float intersectionArea = cv::intersectConvexConvex(polyA, polyB, intersection);
+    if (intersectionArea <= 0.0f) {
+        return 0.0f;
+    }
+
+    const float areaA = static_cast<float>(boxA.width) * static_cast<float>(boxA.height);
+    const float areaB = static_cast<float>(boxB.width) * static_cast<float>(boxB.height);
+    const float unionArea = areaA + areaB - intersectionArea;
     return unionArea > 0.0f ? intersectionArea / unionArea : 0.0f;
 }
 
@@ -137,6 +181,91 @@ std::vector<Detection> decodeYoloOutput(
     return detections;
 }
 
+std::vector<Detection> decodeYoloObbOutput(
+    const cv::Mat& output,
+    const std::vector<std::string>& classNames,
+    const LetterboxTransform& transform,
+    int origWidth,
+    int origHeight,
+    float confThreshold,
+    float nmsThreshold) {
+    const int numClasses = output.cols - 5;
+
+    std::vector<cv::RotatedRect> rotatedBoxes;
+    std::vector<float> scores;
+    std::vector<int> classIds;
+    std::vector<float> angleDegreesList;
+
+    for (int row = 0; row < output.rows; ++row) {
+        const float* data = output.ptr<float>(row);
+        const float cx = data[0];
+        const float cy = data[1];
+        const float w = data[2];
+        const float h = data[3];
+        const float angleRadians = data[4 + numClasses];
+
+        int bestClass = -1;
+        float bestScore = 0.0f;
+        for (int c = 0; c < numClasses; ++c) {
+            const float score = data[4 + c];
+            if (score > bestScore) {
+                bestScore = score;
+                bestClass = c;
+            }
+        }
+        if (bestClass < 0 || bestScore < confThreshold) {
+            continue;
+        }
+
+        const float unpaddedCx = (cx - transform.padX) / transform.scale;
+        const float unpaddedCy = (cy - transform.padY) / transform.scale;
+        const float unpaddedW = w / transform.scale;
+        const float unpaddedH = h / transform.scale;
+        if (unpaddedW <= 0.0f || unpaddedH <= 0.0f) {
+            continue;
+        }
+        const float angleDegrees = angleRadians * 180.0f / static_cast<float>(CV_PI);
+
+        rotatedBoxes.emplace_back(
+            cv::Point2f(unpaddedCx, unpaddedCy), cv::Size2f(unpaddedW, unpaddedH), angleDegrees);
+        scores.push_back(bestScore);
+        classIds.push_back(bestClass);
+        angleDegreesList.push_back(angleDegrees);
+    }
+
+    // Note: OpenCV's C++ API exposes the RotatedRect NMS overload as
+    // NMSBoxes itself (overload resolution on vector<RotatedRect>) -- the
+    // name NMSBoxesRotated only exists in the Python bindings
+    // (CV_EXPORTS_AS(NMSBoxesRotated) renames the binding, not the C++ symbol).
+    std::vector<int> keptIndices;
+    cv::dnn::NMSBoxes(rotatedBoxes, scores, confThreshold, nmsThreshold, keptIndices);
+
+    const cv::Rect frameRect(0, 0, origWidth, origHeight);
+    std::vector<Detection> detections;
+    detections.reserve(keptIndices.size());
+    for (int index : keptIndices) {
+        const cv::RotatedRect& rotatedRect = rotatedBoxes[index];
+        if ((rotatedRect.boundingRect() & frameRect).empty()) {
+            continue;
+        }
+
+        const ObbBox obbBox = centerObbToTopLeftPivotBox(
+            rotatedRect.center.x, rotatedRect.center.y, rotatedRect.size.width, rotatedRect.size.height,
+            angleDegreesList[index]);
+
+        Detection detection;
+        detection.box = obbBox.box;
+        detection.rotationDegrees = obbBox.rotationDegrees;
+        detection.classId = classIds[index];
+        detection.confidence = scores[index];
+        detection.className = (classIds[index] >= 0 && classIds[index] < static_cast<int>(classNames.size()))
+            ? classNames[classIds[index]]
+            : ("class_" + std::to_string(classIds[index]));
+        detections.push_back(std::move(detection));
+    }
+    return detections;
+}
+
 BoxAgreement computeBoxAgreement(
     const std::vector<Detection>& a,
     const std::vector<Detection>& b,
@@ -153,7 +282,8 @@ BoxAgreement computeBoxAgreement(
             if (usedB[i] || b[i].classId != detectionA.classId) {
                 continue;
             }
-            const float iou = computeIoU(detectionA.box, b[i].box);
+            const float iou = computeRotatedIoU(
+                detectionA.box, detectionA.rotationDegrees, b[i].box, b[i].rotationDegrees);
             if (iou >= bestIoU) {
                 bestIoU = iou;
                 bestIndex = static_cast<int>(i);
@@ -173,8 +303,9 @@ YoloModel::YoloModel(
     int inputWidth,
     int inputHeight,
     const OnnxPreprocessingHints& hints,
+    bool isObb,
     std::string& errorOut)
-    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight), hints_(hints) {
+    : classNames_(classNames), inputWidth_(inputWidth), inputHeight_(inputHeight), hints_(hints), isObb_(isObb) {
     OrtSessionResult result = createOrtSession(onnxPath);
     if (!result.session) {
         errorOut = result.error;
@@ -230,5 +361,8 @@ std::vector<Detection> YoloModel::infer(const cv::Mat& frame, float confThreshol
     cv::Mat transposed;
     cv::transpose(output, transposed);
 
+    if (isObb_) {
+        return decodeYoloObbOutput(transposed, classNames_, transform, frame.cols, frame.rows, confThreshold, nmsThreshold);
+    }
     return decodeYoloOutput(transposed, classNames_, transform, frame.cols, frame.rows, confThreshold, nmsThreshold);
 }

@@ -83,7 +83,7 @@ void drawSlotConfig(ModelEvaluationState& state, int slotIndex) {
         slotIndex == 0 ? FilePickerTarget::SlotAClassNames : FilePickerTarget::SlotBClassNames;
 
     const bool loadClicked = drawModelSlotConfigFields(
-        slot.onnxPath, slot.classNamesPath, slot.inputWidth, slot.inputHeight, confThreshold, nmsThreshold,
+        slot.onnxPath, slot.classNamesPath, slot.inputWidth, slot.inputHeight, confThreshold, nmsThreshold, nullptr,
         slot.autoDetectStatus, slot.loadError,
         [&state, modelTarget]() {
             state.filePickerTarget = modelTarget;
@@ -718,7 +718,8 @@ void drawGroundTruthLine(ComparisonTaskMode mode, const BatchImageResult* image)
 
 bool detectionMatchesGroundTruth(const Detection& detection, const std::vector<GroundTruthBox>& groundTruthBoxes) {
     for (const auto& box : groundTruthBoxes) {
-        if (box.className == detection.className && computeIoU(detection.box, box.box) >= 0.5f) {
+        if (box.className == detection.className
+            && computeRotatedIoU(detection.box, detection.rotationDegrees, box.box, box.rotationDegrees) >= 0.5f) {
             return true;
         }
     }

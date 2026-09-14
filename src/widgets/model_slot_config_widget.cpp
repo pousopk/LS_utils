@@ -9,6 +9,7 @@ bool drawModelSlotConfigFields(
     int& inputHeight,
     float* confThreshold,
     float* nmsThreshold,
+    bool* isObbModel,
     const std::string& autoDetectStatus,
     const std::string& loadError,
     const std::function<void()>& onBrowseModel,
@@ -28,6 +29,9 @@ bool drawModelSlotConfigFields(
     if (confThreshold != nullptr && nmsThreshold != nullptr) {
         ImGui::SliderFloat("Confidence", confThreshold, 0.05f, 0.95f);
         ImGui::SliderFloat("NMS IoU", nmsThreshold, 0.05f, 0.95f);
+    }
+    if (isObbModel != nullptr) {
+        ImGui::Checkbox("OBB model (rotated boxes)", isObbModel);
     }
 
     if (!autoDetectStatus.empty()) {

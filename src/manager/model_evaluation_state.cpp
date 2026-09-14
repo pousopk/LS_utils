@@ -6,6 +6,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -33,6 +34,36 @@ std::vector<std::string> loadClassNamesFromFile(const std::string& path) {
 
 } // namespace
 
+namespace {
+
+// Same rotate-around-pivot construction as labeling_state.cpp's
+// rotatedBoxCorners (phase B), reimplemented locally here rather than
+// imported: this file is the model-inference/evaluation layer and
+// shouldn't depend on labeling_state.hpp, which is specifically the
+// Labeling window's editor state.
+std::array<cv::Point, 4> rotatedDetectionBoxCorners(const cv::Rect& box, float rotationDegrees) {
+    const double theta = static_cast<double>(rotationDegrees) * CV_PI / 180.0;
+    const double cosT = std::cos(theta);
+    const double sinT = std::sin(theta);
+    const cv::Point2d pivot(box.x, box.y);
+    const cv::Point2d localCorners[4] = {
+        cv::Point2d(0.0, 0.0),
+        cv::Point2d(box.width, 0.0),
+        cv::Point2d(box.width, box.height),
+        cv::Point2d(0.0, box.height),
+    };
+    std::array<cv::Point, 4> result;
+    for (int i = 0; i < 4; ++i) {
+        const double rx = localCorners[i].x * cosT - localCorners[i].y * sinT;
+        const double ry = localCorners[i].x * sinT + localCorners[i].y * cosT;
+        result[i] = cv::Point(
+            static_cast<int>(std::round(pivot.x + rx)), static_cast<int>(std::round(pivot.y + ry)));
+    }
+    return result;
+}
+
+} // namespace
+
 // Box/label size scales UP with the frame's own resolution relative to an
 // 800px-wide baseline (never down -- a photo smaller than the baseline
 // still gets full-size text, since shrinking further only makes small
@@ -47,7 +78,14 @@ cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& d
     const int textThickness = std::max(2, static_cast<int>(std::lround(scale * 2.0f)));
     const double fontScale = 0.85 * scale;
     for (const auto& detection : detections) {
-        cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), boxThickness);
+        if (detection.rotationDegrees == 0.0f) {
+            cv::rectangle(annotated, detection.box, cv::Scalar(0, 255, 0), boxThickness);
+        } else {
+            const auto corners = rotatedDetectionBoxCorners(detection.box, detection.rotationDegrees);
+            const cv::Point* pts = corners.data();
+            const int numPts = static_cast<int>(corners.size());
+            cv::polylines(annotated, &pts, &numPts, 1, /*isClosed=*/true, cv::Scalar(0, 255, 0), boxThickness);
+        }
 
         const std::string label =
             detection.className + " " + std::to_string(static_cast<int>(detection.confidence * 100)) + "%";
@@ -91,7 +129,7 @@ void loadModelSlot(ModelSlotConfig& slot, ComparisonTaskMode mode) {
     if (mode == ComparisonTaskMode::Detection) {
         std::string error;
         auto model = std::make_shared<YoloModel>(
-            slot.onnxPath, classNames, slot.inputWidth, slot.inputHeight, slot.hints, error);
+            slot.onnxPath, classNames, slot.inputWidth, slot.inputHeight, slot.hints, slot.isObbDetectionModel, error);
         if (!model->isValid()) {
             slot.loadError = error;
             return;
@@ -568,7 +606,9 @@ bool isBatchEvalImageMismatch(ComparisonTaskMode mode, const BatchRuntime& batch
                 if (matched[i] || image->groundTruthBoxes[i].className != prediction.className) {
                     continue;
                 }
-                const float iou = computeIoU(prediction.box, image->groundTruthBoxes[i].box);
+                const float iou = computeRotatedIoU(
+                    prediction.box, prediction.rotationDegrees,
+                    image->groundTruthBoxes[i].box, image->groundTruthBoxes[i].rotationDegrees);
                 if (iou >= bestIoU) {
                     bestIoU = iou;
                     bestIdx = static_cast<int>(i);

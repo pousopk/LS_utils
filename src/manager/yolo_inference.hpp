@@ -14,7 +14,29 @@ struct Detection {
     int classId = -1;
     std::string className;
     float confidence = 0.0f;
+    // Degrees, clockwise, around box's top-left corner (box.x, box.y)
+    // pre-rotation -- same convention as DraftDetectionBox/GroundTruthBox.
+    // 0.0 for an ordinary axis-aligned detection.
+    float rotationDegrees = 0.0f;
 };
+
+struct ObbBox {
+    cv::Rect box;              // the box's own unrotated x/y/width/height
+    float rotationDegrees = 0.0f;
+};
+
+// Pure function: converts a center-pivot oriented box -- as YOLO's xywhr
+// output describes it (cx,cy = center, w,h = box dimensions along its own
+// axes, rotationDegrees = clockwise rotation of those axes relative to
+// the image's x/y axes) -- into this app's top-left-pivot convention
+// (box = the same rectangle's un-rotated x/y/width/height, rotationDegrees
+// = clockwise rotation around box.x,box.y). Same rigid rectangle, just
+// re-anchored to a different (but equivalent) corner: the pre-rotation
+// top-left corner, relative to the center, is (-w/2,-h/2); rotating that
+// offset by rotationDegrees and adding it to (cx,cy) gives the point that
+// stays fixed on screen when the box is described as rotating around it
+// instead of around its center.
+ObbBox centerObbToTopLeftPivotBox(float cx, float cy, float w, float h, float rotationDegrees);
 
 // Maps between an `origWidth` x `origHeight` frame and the square
 // `modelInputSize` x `modelInputSize` "letterboxed" image YOLO expects:
@@ -52,6 +74,18 @@ cv::Mat unletterboxMask(
 
 float computeIoU(const cv::Rect& a, const cv::Rect& b);
 
+// Rotation-aware IoU: if both rotationDegreesA and rotationDegreesB are
+// exactly 0.0, delegates to computeIoU (byte-identical fast path -- the
+// overwhelmingly common case, and every existing caller/test of
+// computeIoU is unaffected). Otherwise, computes each box's 4 corners
+// via rotatedBoxCorners() and takes their exact polygon intersection via
+// cv::intersectConvexConvex -- both boxes' corners come from the same
+// perimeter-walk construction regardless of rotation, so their winding
+// order is always mutually consistent, which is what
+// intersectConvexConvex requires.
+float computeRotatedIoU(
+    const cv::Rect& boxA, float rotationDegreesA, const cv::Rect& boxB, float rotationDegreesB);
+
 // Decodes a raw Ultralytics YOLOv8/v11-style output tensor already reshaped
 // to a `numBoxes` x (4 + numClasses) CV_32F matrix (each row is
 // [cx, cy, w, h, classScore_0, ..., classScore_{numClasses-1}], in
@@ -59,6 +93,28 @@ float computeIoU(const cv::Rect& a, const cv::Rect& b);
 // coordinates, keeping only the best class per row above `confThreshold`
 // and applying NMS at `nmsThreshold`.
 std::vector<Detection> decodeYoloOutput(
+    const cv::Mat& output,
+    const std::vector<std::string>& classNames,
+    const LetterboxTransform& transform,
+    int origWidth,
+    int origHeight,
+    float confThreshold,
+    float nmsThreshold);
+
+// Ultralytics OBB layout: [cx, cy, w, h, class_0..class_{nc-1}, angle_radians]
+// -- one more column than decodeYoloOutput's [cx,cy,w,h,classes], the
+// extra being the angle appended last. NMS runs on cv::RotatedRect via
+// the cv::dnn::NMSBoxes overload for vector<RotatedRect> (rotation-aware,
+// unlike decodeYoloOutput's axis-aligned cv::Rect overload) using each
+// candidate's raw center/size/angle -- cheap and natural in that space,
+// before any pivot conversion.
+// Only the survivors are converted to the app's top-left-pivot Detection
+// convention via centerObbToTopLeftPivotBox. A detection is rejected if
+// its RotatedRect's axis-aligned bounding box doesn't intersect the frame
+// at all -- the stored box itself is never clamped, since clamping a
+// pre-rotation x/y/width/height directly would move the pivot and
+// silently corrupt the rotation.
+std::vector<Detection> decodeYoloObbOutput(
     const cv::Mat& output,
     const std::vector<std::string>& classNames,
     const LetterboxTransform& transform,
@@ -100,6 +156,7 @@ public:
         int inputWidth,
         int inputHeight,
         const OnnxPreprocessingHints& hints,
+        bool isObb,
         std::string& errorOut);
 
     bool isValid() const { return valid_; }
@@ -121,6 +178,7 @@ private:
     int inputWidth_ = 640;
     int inputHeight_ = 640;
     OnnxPreprocessingHints hints_;
+    bool isObb_ = false;
     bool gpuActive_ = false;
     bool valid_ = false;
 };

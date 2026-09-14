@@ -39,6 +39,10 @@ struct ModelSlotConfig {
     int inputHeight = 0;
     float confThreshold = 0.25f;
     float nmsThreshold = 0.45f;
+    // Manual toggle -- auto-detecting OBB vs. axis-aligned from the ONNX
+    // file alone is ambiguous (a 1-class OBB model and a 2-class
+    // axis-aligned model produce the same output channel count).
+    bool isObbDetectionModel = false;
 
     std::shared_ptr<YoloModel> detectionModel;
     std::shared_ptr<ClassificationModel> classificationModel;
