@@ -22,11 +22,13 @@ constexpr int kDatasetThumbnailMaxDim = 320;
 struct DatasetThumbnailRequest {
     int taskId = 0;
     std::string imagePath;   // task.data[dataImageKey], as returned by Label Studio
-    // Annotation + prediction boxes to draw onto the decoded thumbnail
-    // (via boxesToDrawForTask), in original-image pixel space -- run()
-    // scales these to match the resize it applies before drawing, and
-    // draws each list in its own color so ground truth and a model's
-    // guess stay visually distinguishable. Empty if the project has no
+    // Annotation + prediction boxes (via boxesToDrawForTask), in
+    // original-image pixel space -- run() rescales these to match
+    // `thumbnail`'s own (resized) pixel space and hands them back in the
+    // result rather than baking them into the image, so the window layer
+    // can draw them as an ImGui overlay (colored per class name, and
+    // toggleable) instead of fixed pixels that can't respond to a
+    // show/hide toggle without re-fetching. Empty if the project has no
     // RectangleLabels tag or this task has no boxes of that kind.
     std::vector<DraftDetectionBox> annotationBoxes;
     std::vector<DraftDetectionBox> predictionBoxes;
@@ -36,6 +38,12 @@ struct DatasetThumbnailResult {
     int taskId = 0;
     bool success = false;
     cv::Mat thumbnail;   // BGR, resized to kDatasetThumbnailMaxDim on its longer side; empty if !success
+    // Same boxes as the request, rescaled to thumbnail's own pixel space
+    // (i.e. already consistent with thumbnail.cols/thumbnail.rows) --
+    // the window layer scales these once more, from thumbnail pixel
+    // space to on-screen space, when drawing the overlay.
+    std::vector<DraftDetectionBox> annotationBoxes;
+    std::vector<DraftDetectionBox> predictionBoxes;
 };
 
 // A single background thread processing a FIFO queue of thumbnail

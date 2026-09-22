@@ -1,7 +1,6 @@
 #include "manager/dataset_browser_thumbnail_worker.hpp"
 
 #include "manager/label_studio_client.hpp"
-#include "manager/rotated_box_geometry.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -12,49 +11,23 @@
 
 namespace {
 
-// Draws `boxes` (in original-image pixel space) onto `image` in `color`,
-// scaling each box by `scale` first (the same factor run() resized the
-// decoded image by) -- small, thin strokes tuned for a thumbnail, not
-// annotateDetections's thicker defaults (tuned for a full-size preview
-// frame). No confidence percentage in the label: parseDetectionResultBoxes
-// leaves DraftDetectionBox::confidence at 0 for both annotations and
-// predictions (this app's own convention, see its doc comment), so
-// printing it would show a misleading "0%" on every box.
-void drawBoxesOnThumbnail(
-    cv::Mat& image, const std::vector<DraftDetectionBox>& boxes, double scale, const cv::Scalar& color) {
+// Rescales `boxes` (in original-image pixel space) by `scale` -- the
+// same factor run() resized the decoded image by -- so the returned
+// boxes are consistent with the (possibly resized) thumbnail's own pixel
+// space. Rotation is scale-invariant, so only box.box and className
+// carry through unchanged.
+std::vector<DraftDetectionBox> scaleBoxesToThumbnail(const std::vector<DraftDetectionBox>& boxes, double scale) {
+    std::vector<DraftDetectionBox> scaled;
+    scaled.reserve(boxes.size());
     for (const auto& box : boxes) {
-        const cv::Rect scaledBox(
+        DraftDetectionBox scaledBox = box;
+        scaledBox.box = cv::Rect(
             static_cast<int>(std::lround(box.box.x * scale)), static_cast<int>(std::lround(box.box.y * scale)),
             static_cast<int>(std::lround(box.box.width * scale)), static_cast<int>(std::lround(box.box.height * scale)));
-
-        if (box.rotationDegrees == 0.0f) {
-            cv::rectangle(image, scaledBox, color, 1);
-        } else {
-            const auto corners = rotatedBoxCorners(scaledBox, box.rotationDegrees);
-            std::vector<cv::Point> intCorners;
-            intCorners.reserve(corners.size());
-            for (const auto& corner : corners) {
-                intCorners.emplace_back(
-                    static_cast<int>(std::lround(corner.x)), static_cast<int>(std::lround(corner.y)));
-            }
-            const cv::Point* pts = intCorners.data();
-            const int numPts = static_cast<int>(intCorners.size());
-            cv::polylines(image, &pts, &numPts, 1, /*isClosed=*/true, color, 1);
-        }
-
-        if (!box.className.empty()) {
-            const cv::Point labelOrigin(scaledBox.x, std::max(10, scaledBox.y - 2));
-            cv::putText(image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv::LINE_AA);
-        }
+        scaled.push_back(std::move(scaledBox));
     }
+    return scaled;
 }
-
-// Ground truth (annotation) boxes in green, matching this app's only
-// other box-drawing convention (annotateDetections, model_evaluation_state.cpp).
-// Predictions get a distinct orange so the two are never confused with
-// each other on the same image.
-const cv::Scalar kAnnotationBoxColor(0, 255, 0);
-const cv::Scalar kPredictionBoxColor(0, 165, 255);
 
 } // namespace
 
@@ -151,8 +124,8 @@ void DatasetThumbnailWorker::run() {
                 } else {
                     resized = decoded;
                 }
-                drawBoxesOnThumbnail(resized, request.annotationBoxes, effectiveScale, kAnnotationBoxColor);
-                drawBoxesOnThumbnail(resized, request.predictionBoxes, effectiveScale, kPredictionBoxColor);
+                result.annotationBoxes = scaleBoxesToThumbnail(request.annotationBoxes, effectiveScale);
+                result.predictionBoxes = scaleBoxesToThumbnail(request.predictionBoxes, effectiveScale);
                 result.thumbnail = resized;
                 result.success = true;
             }
