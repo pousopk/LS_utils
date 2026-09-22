@@ -143,8 +143,6 @@ void updateDatasetBrowserState(DatasetBrowserState& state, const LabelStudioSess
             glGenTextures(1, &entry.texture);
             uploadFrameToTexture(entry.texture, thumbnailResult.thumbnail, entry.textureWidth, entry.textureHeight);
             entry.status = DatasetThumbnailStatus::Loaded;
-            entry.annotationBoxes = thumbnailResult.annotationBoxes;
-            entry.predictionBoxes = thumbnailResult.predictionBoxes;
         } else {
             entry.status = DatasetThumbnailStatus::Failed;
         }

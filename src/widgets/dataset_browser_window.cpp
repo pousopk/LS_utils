@@ -1,8 +1,6 @@
 #include "widgets/dataset_browser_window.hpp"
 
 #include "manager/app_runtime.hpp"
-#include "manager/label_color.hpp"
-#include "manager/rotated_box_geometry.hpp"
 #include "widgets/file_browser_utils.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/tooltip_helpers.hpp"
@@ -17,52 +15,6 @@ namespace {
 constexpr float kThumbnailCellSize = 150.0f;
 constexpr float kThumbnailCellSpacing = 8.0f;
 constexpr int kGridLookaheadRows = 2;
-
-ImU32 toImU32(const LabelColor& color) {
-    return IM_COL32(color.r, color.g, color.b, 255);
-}
-
-// Draws `boxes` (in `textureWidth`x`textureHeight` pixel space -- see
-// DatasetThumbnailEntry) as an overlay on top of the image last drawn
-// via ImGui::Image/ImageButton, scaling to that image's actual on-screen
-// rect (ImGui::GetItemRectMin/Max). Mirrors labeling_window.cpp's
-// drawBoxOverlay exactly (same scale-then-AddRect/AddPolyline/AddText
-// shape, same colorForClassName/toImU32 coloring), so annotation and
-// prediction boxes look and behave like every other box this app draws
-// -- just not interactively editable here.
-void drawBoxesOverlay(const std::vector<DraftDetectionBox>& boxes, int textureWidth, int textureHeight) {
-    if (boxes.empty() || textureWidth <= 0 || textureHeight <= 0) {
-        return;
-    }
-    const ImVec2 imageMin = ImGui::GetItemRectMin();
-    const ImVec2 imageMax = ImGui::GetItemRectMax();
-    const float imageW = imageMax.x - imageMin.x;
-    const float imageH = imageMax.y - imageMin.y;
-    if (imageW <= 1.0f || imageH <= 1.0f) {
-        return;
-    }
-    const float sx = imageW / static_cast<float>(textureWidth);
-    const float sy = imageH / static_cast<float>(textureHeight);
-
-    for (const auto& box : boxes) {
-        const ImU32 color = toImU32(colorForClassName(box.className));
-        const auto corners = rotatedBoxCorners(box.box, box.rotationDegrees);
-        ImVec2 screenCorners[4];
-        for (int c = 0; c < 4; ++c) {
-            screenCorners[c] = ImVec2(imageMin.x + sx * corners[c].x, imageMin.y + sy * corners[c].y);
-        }
-
-        if (box.rotationDegrees == 0.0f) {
-            ImGui::GetWindowDrawList()->AddRect(screenCorners[0], screenCorners[2], color, 0.0f, 0, 2.0f);
-        } else {
-            ImGui::GetWindowDrawList()->AddPolyline(screenCorners, 4, color, ImDrawFlags_Closed, 2.0f);
-        }
-        if (!box.className.empty()) {
-            ImGui::GetWindowDrawList()->AddText(
-                ImVec2(screenCorners[0].x, screenCorners[0].y - 14.0f), color, box.className.c_str());
-        }
-    }
-}
 
 void drawFilterControls(DatasetBrowserState& state) {
     bool filterChanged = false;
@@ -100,11 +52,22 @@ void drawFilterControls(DatasetBrowserState& state) {
         reapplyDatasetBrowserFilter(state);
     }
 
-    // Display-only toggles -- don't affect which tasks match, only
-    // whether the overlay draws that box list.
-    ImGui::Checkbox("Show annotations", &state.showAnnotationBoxes);
+    // Which box list gets baked into thumbnails -- doesn't affect which
+    // tasks match, only what gets drawn on them. Boxes are baked into
+    // the image at decode time (see DatasetThumbnailWorker), so
+    // switching this clears already-cached thumbnails and lets them
+    // re-fetch with the new selection baked in.
+    const DatasetBoxOverlayMode previousMode = state.boxOverlayMode;
+    if (ImGui::RadioButton("Annotations", state.boxOverlayMode == DatasetBoxOverlayMode::Annotations)) {
+        state.boxOverlayMode = DatasetBoxOverlayMode::Annotations;
+    }
     ImGui::SameLine();
-    ImGui::Checkbox("Show predictions", &state.showPredictionBoxes);
+    if (ImGui::RadioButton("Predictions", state.boxOverlayMode == DatasetBoxOverlayMode::Predictions)) {
+        state.boxOverlayMode = DatasetBoxOverlayMode::Predictions;
+    }
+    if (state.boxOverlayMode != previousMode) {
+        state.thumbnailCache.clear();
+    }
 }
 
 void drawGrid(DatasetBrowserState& state) {
@@ -156,12 +119,6 @@ void drawGrid(DatasetBrowserState& state) {
                     if (ImGui::ImageButton("thumb", (void*)(intptr_t)it->second.texture, fitted)) {
                         state.selectedTaskId = taskId;
                     }
-                    if (state.showAnnotationBoxes) {
-                        drawBoxesOverlay(it->second.annotationBoxes, it->second.textureWidth, it->second.textureHeight);
-                    }
-                    if (state.showPredictionBoxes) {
-                        drawBoxesOverlay(it->second.predictionBoxes, it->second.textureWidth, it->second.textureHeight);
-                    }
                     drawHoverEnlargedImage(it->second.texture, it->second.textureWidth, it->second.textureHeight, fitted);
                 }
                 ImGui::PopID();
@@ -178,8 +135,10 @@ void drawGrid(DatasetBrowserState& state) {
                 [taskId](const DatasetTaskSummary& s) { return s.taskId == taskId; });
             if (summaryIt != state.summaries.end()) {
                 const auto boxes = boxesToDrawForTask(state.rawTasksJson, state.rectangleLabelsFromName, taskId);
-                state.thumbnailWorker.requestThumbnail(
-                    DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxes.annotationBoxes, boxes.predictionBoxes});
+                const auto& boxesToDraw = state.boxOverlayMode == DatasetBoxOverlayMode::Annotations
+                    ? boxes.annotationBoxes
+                    : boxes.predictionBoxes;
+                state.thumbnailWorker.requestThumbnail(DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxesToDraw});
             }
         }
     }
@@ -229,12 +188,6 @@ void drawSelectedTaskDetail(DatasetBrowserState& state) {
         const ImVec2 fitted =
             fitImageToRegion(textureIt->second.textureWidth, textureIt->second.textureHeight, 280.0f, 280.0f);
         ImGui::Image((void*)(intptr_t)textureIt->second.texture, fitted);
-        if (state.showAnnotationBoxes) {
-            drawBoxesOverlay(textureIt->second.annotationBoxes, textureIt->second.textureWidth, textureIt->second.textureHeight);
-        }
-        if (state.showPredictionBoxes) {
-            drawBoxesOverlay(textureIt->second.predictionBoxes, textureIt->second.textureWidth, textureIt->second.textureHeight);
-        }
     } else {
         ImGui::TextDisabled("Thumbnail not loaded.");
     }
