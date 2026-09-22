@@ -146,6 +146,30 @@ void syncLabelAssistantAutoFetch(LabelAssistantState& state, const LabelStudioSe
 
 } // namespace
 
+namespace {
+
+std::string describePushResult(const LabelAssistantState& state, const LabelStudioPushRunResult& pushResult) {
+    if (pushResult.mode == LabelStudioPushMode::AttachToKnownTasks) {
+        const LabelStudioAttachSummary& summary = pushResult.attachSummary;
+        std::string status = "Created " + std::to_string(summary.created) + ", failed "
+            + std::to_string(summary.failed);
+        if (state.lastPushUnresolvedCount > 0) {
+            status += ", unresolved " + std::to_string(state.lastPushUnresolvedCount);
+        }
+        return status;
+    }
+
+    const LabelStudioPushSummary& summary = pushResult.uploadSummary;
+    if (!summary.error.empty()) {
+        return summary.error;
+    }
+    return "Created " + std::to_string(summary.created) + ", upload failed "
+        + std::to_string(summary.uploadFailed) + ", task not resolved " + std::to_string(summary.taskNotResolved)
+        + ", prediction failed " + std::to_string(summary.predictionFailed);
+}
+
+} // namespace
+
 void updateLabelAssistantState(LabelAssistantState& state, const LabelStudioSessionState& session) {
     if (state.runState == LabelAssistantRunState::Running) {
         state.lastProgress = state.worker.progress();
@@ -158,6 +182,17 @@ void updateLabelAssistantState(LabelAssistantState& state, const LabelStudioSess
                 state.result = std::move(runResult.result);
                 state.runState = LabelAssistantRunState::Complete;
             }
+        }
+    }
+
+    if (state.pushState == LabelAssistantPushState::Running) {
+        state.lastPushProgress = state.pushWorker.progress();
+
+        LabelStudioPushRunResult pushResult;
+        if (state.pushWorker.tryTakeResult(pushResult)) {
+            state.pushState = pushResult.cancelled ? LabelAssistantPushState::Cancelled
+                                                    : LabelAssistantPushState::Complete;
+            state.exportStatus = describePushResult(state, pushResult);
         }
     }
 
@@ -202,43 +237,33 @@ std::vector<DraftPrediction> buildDraftPredictions(const LabelAssistantState& st
 void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const LabelStudioSessionState& session) {
     const std::vector<DraftPrediction> draftPredictions = buildDraftPredictions(state);
 
+    LabelStudioPushConfig config;
+    config.baseUrl = session.baseUrl;
+    config.apiToken = session.apiToken;
+
     if (state.sourceMode == LabelAssistantSourceMode::LabelStudioProject) {
-        std::vector<LabelStudioKnownTaskPrediction> predictions;
-        predictions.reserve(draftPredictions.size());
-        int unresolved = 0;
+        config.mode = LabelStudioPushMode::AttachToKnownTasks;
+        config.knownTaskPredictions.reserve(draftPredictions.size());
+        state.lastPushUnresolvedCount = 0;
         for (const auto& draft : draftPredictions) {
             const std::optional<int> taskId = parseTaskIdFromFilename(draft.filename);
             if (!taskId) {
-                unresolved++;
+                state.lastPushUnresolvedCount++;
                 continue;
             }
-            predictions.push_back(LabelStudioKnownTaskPrediction{*taskId, draft.resultAndScore});
+            config.knownTaskPredictions.push_back(LabelStudioKnownTaskPrediction{*taskId, draft.resultAndScore});
         }
-
-        const LabelStudioAttachSummary summary =
-            attachPredictionsToKnownTasks(session.baseUrl, session.apiToken, predictions);
-
-        state.exportStatus = "Created " + std::to_string(summary.created) + ", failed "
-            + std::to_string(summary.failed) + (unresolved > 0 ? ", unresolved " + std::to_string(unresolved) : "");
-        return;
+    } else {
+        config.mode = LabelStudioPushMode::UploadNewTasks;
+        config.projectId = session.activeProjectId;
+        config.newTaskPredictions.reserve(draftPredictions.size());
+        for (const auto& draft : draftPredictions) {
+            config.newTaskPredictions.push_back(LabelStudioPredictionInput{
+                draft.filename, state.imageFolderPath + "/" + draft.filename, draft.resultAndScore});
+        }
     }
 
-    std::vector<LabelStudioPredictionInput> predictions;
-    predictions.reserve(draftPredictions.size());
-    for (const auto& draft : draftPredictions) {
-        predictions.push_back(LabelStudioPredictionInput{
-            draft.filename, state.imageFolderPath + "/" + draft.filename, draft.resultAndScore});
-    }
-
-    const LabelStudioPushSummary summary =
-        pushDraftsAsNewLabelStudioTasks(session.baseUrl, session.activeProjectId, session.apiToken, predictions);
-
-    if (!summary.error.empty()) {
-        state.exportStatus = summary.error;
-        return;
-    }
-
-    state.exportStatus = "Created " + std::to_string(summary.created) + ", upload failed "
-        + std::to_string(summary.uploadFailed) + ", task not resolved " + std::to_string(summary.taskNotResolved)
-        + ", prediction failed " + std::to_string(summary.predictionFailed);
+    state.exportStatus.clear();
+    state.pushWorker.start(std::move(config));
+    state.pushState = LabelAssistantPushState::Running;
 }

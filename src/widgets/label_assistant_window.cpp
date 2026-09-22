@@ -319,6 +319,22 @@ void drawExportSection(
         ImGui::Checkbox("Include images with no detections", &state.includeZeroDetectionImages);
     }
 
+    if (state.pushState == LabelAssistantPushState::Running) {
+        ImGui::Text("%d / %d", state.lastPushProgress.completed, state.lastPushProgress.total);
+        const float fraction = state.lastPushProgress.total > 0
+            ? static_cast<float>(state.lastPushProgress.completed) / static_cast<float>(state.lastPushProgress.total)
+            : 0.0f;
+        ImGui::ProgressBar(fraction);
+        if (ImGui::Button("Cancel")) {
+            state.pushWorker.requestCancel();
+        }
+        return;
+    }
+
+    if (state.pushState == LabelAssistantPushState::Cancelled) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Push cancelled.");
+    }
+
     const bool hasDrafts = state.taskMode == ComparisonTaskMode::Classification
         ? !state.result.classificationDrafts.empty()
         : !state.result.detectionDrafts.empty();
