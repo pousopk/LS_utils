@@ -1,3 +1,4 @@
+#include "manager/dataset_thumbnail_lru.hpp"
 #include "manager/label_studio_dataset_browser.hpp"
 
 #include <nlohmann/json.hpp>
@@ -232,6 +233,32 @@ void test_buildDatasetExportJson_preservesTaskObjectUnmodified() {
     CHECK(exported[0]["annotations"][0]["id"] == 9);
 }
 
+void test_idsToEvict_noEvictionWhenUnderCap() {
+    CHECK(idsToEvict({1, 2, 3}, {}, 5).empty());
+}
+
+void test_idsToEvict_evictsLeastRecentlyTouchedFirst() {
+    const auto toEvict = idsToEvict({1, 2, 3, 4}, {}, 2);
+    CHECK(toEvict.size() == 2);
+    CHECK(toEvict[0] == 1);
+    CHECK(toEvict[1] == 2);
+}
+
+void test_idsToEvict_neverEvictsCurrentlyVisibleIds() {
+    const auto toEvict = idsToEvict({1, 2, 3, 4}, {1, 2}, 2);
+    CHECK(toEvict.size() == 2);
+    CHECK(toEvict[0] == 3);
+    CHECK(toEvict[1] == 4);
+}
+
+void test_idsToEvict_visibleIdsAloneOverCapEvictsOnlyNonVisible() {
+    CHECK(idsToEvict({1, 2, 3}, {1, 2, 3}, 1).empty());
+}
+
+void test_idsToEvict_exactlyAtCapEvictsNothing() {
+    CHECK(idsToEvict({1, 2}, {}, 2).empty());
+}
+
 } // namespace
 
 int main() {
@@ -255,6 +282,11 @@ int main() {
     test_buildDatasetExportJson_returnsOnlyMatchingTasks();
     test_buildDatasetExportJson_emptyMatchingIdsReturnsEmptyArray();
     test_buildDatasetExportJson_preservesTaskObjectUnmodified();
+    test_idsToEvict_noEvictionWhenUnderCap();
+    test_idsToEvict_evictsLeastRecentlyTouchedFirst();
+    test_idsToEvict_neverEvictsCurrentlyVisibleIds();
+    test_idsToEvict_visibleIdsAloneOverCapEvictsOnlyNonVisible();
+    test_idsToEvict_exactlyAtCapEvictsNothing();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
