@@ -27,13 +27,17 @@ constexpr int kDatasetThumbnailMaxDim = 480;
 struct DatasetThumbnailRequest {
     int taskId = 0;
     std::string imagePath;   // task.data[dataImageKey], as returned by Label Studio
-    // The boxes to draw onto the decoded thumbnail (via
-    // boxesToDrawForTask -- caller picks annotationBoxes or
-    // predictionBoxes depending on DatasetBrowserState::boxOverlayMode),
-    // in original-image pixel space -- run() scales these to match the
-    // resize it applies before drawing. Empty if the project has no
-    // RectangleLabels tag or this task has no boxes of that kind.
+    // The boxes/masks to draw onto the decoded thumbnail (via
+    // boxesToDrawForTask/masksToDrawForTask -- caller picks the
+    // annotation or prediction list depending on
+    // DatasetBrowserState::overlayMode), in original-image pixel space
+    // -- run() scales/resizes these to match the resize it applies
+    // before drawing. Empty if the project has no RectangleLabels/
+    // BrushLabels tag or this task has no boxes/masks of that kind.
+    // Masks are composited first, boxes drawn on top, so a box's
+    // outline and label stay legible against the mask's color wash.
     std::vector<DraftDetectionBox> boxesToDraw;
+    std::vector<DraftBrushRegion> masksToDraw;
 };
 
 struct DatasetThumbnailResult {
