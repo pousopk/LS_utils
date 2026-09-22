@@ -274,6 +274,18 @@ std::vector<LabelStudioProjectSummary> parseLabelStudioProjects(const nlohmann::
     return out;
 }
 
+bool shouldFetchNextLabelStudioPage(const nlohmann::json& parsedPage, size_t pageItemCount, int pageSize) {
+    if (parsedPage.is_object() && parsedPage.contains("next")) {
+        // DRF-style pagination: "next" is always present when it applies,
+        // and authoritative -- trust it over the page-size heuristic.
+        return !parsedPage["next"].is_null();
+    }
+    // No "next" key at all (Label Studio's native tasks-list shape, or a
+    // bare array): fall back to the page-size heuristic. A full page
+    // might not be the last one; a short or empty page definitely is.
+    return pageItemCount > 0 && pageItemCount >= static_cast<size_t>(pageSize);
+}
+
 LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl, const std::string& apiToken) {
     LabelStudioProjectListResult out;
     nlohmann::json allProjects = nlohmann::json::array();
@@ -304,14 +316,8 @@ LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl
         }
 
         const nlohmann::json* pageItems = &parsed;
-        bool hasMore = false;
-        if (parsed.is_object()) {
-            if (parsed.contains("results") && parsed["results"].is_array()) {
-                pageItems = &parsed["results"];
-            }
-            if (parsed.contains("next") && !parsed["next"].is_null()) {
-                hasMore = true;
-            }
+        if (parsed.is_object() && parsed.contains("results") && parsed["results"].is_array()) {
+            pageItems = &parsed["results"];
         }
         if (!pageItems->is_array()) {
             break;
@@ -319,10 +325,7 @@ LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl
         for (const auto& item : *pageItems) {
             allProjects.push_back(item);
         }
-        if (pageItems->empty() || pageItems->size() < static_cast<size_t>(pageSize)) {
-            hasMore = false;
-        }
-        if (!hasMore) {
+        if (!shouldFetchNextLabelStudioPage(parsed, pageItems->size(), pageSize)) {
             break;
         }
     }
@@ -352,6 +355,17 @@ std::vector<int> selectMostRecentTaskIds(const nlohmann::json& tasksJson, size_t
     }
     std::reverse(ids.begin(), ids.end());
     return ids;
+}
+
+size_t countLabelStudioTasks(const nlohmann::json& tasksJson) {
+    const nlohmann::json* tasks = &tasksJson;
+    if (tasksJson.is_object() && tasksJson.contains("tasks") && tasksJson["tasks"].is_array()) {
+        tasks = &tasksJson["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return 0;
+    }
+    return tasks->size();
 }
 
 std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
@@ -631,12 +645,12 @@ namespace {
 constexpr const char* kModelVersion = "vision_app_label_assistant";
 
 // Fetches every task in the project (with predictions embedded, via Label
-// Studio's `fields=all` query param), paging defensively: stops when a
-// page returns fewer tasks than requested, an empty page, or (if present)
-// a null/absent "next" link. Handles a bare-array response, or an object
-// with a "tasks" or "results" array -- Label Studio's exact response
-// shape here isn't pinned to one version. Capped at 1000 pages as a
-// safety valve against an unexpected server response looping forever.
+// Studio's `fields=all` query param), paging via
+// shouldFetchNextLabelStudioPage until it says to stop. Handles a
+// bare-array response, or an object with a "tasks" or "results" array --
+// Label Studio's exact response shape here isn't pinned to one version.
+// Capped at 1000 pages as a safety valve against an unexpected server
+// response looping forever.
 bool fetchAllLabelStudioTasksRaw(
     const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
     std::string& error) {
@@ -668,15 +682,11 @@ bool fetchAllLabelStudioTasksRaw(
         }
 
         const nlohmann::json* pageTasks = &parsed;
-        bool hasMore = false;
         if (parsed.is_object()) {
             if (parsed.contains("tasks") && parsed["tasks"].is_array()) {
                 pageTasks = &parsed["tasks"];
             } else if (parsed.contains("results") && parsed["results"].is_array()) {
                 pageTasks = &parsed["results"];
-            }
-            if (parsed.contains("next") && !parsed["next"].is_null()) {
-                hasMore = true;
             }
         }
         if (!pageTasks->is_array()) {
@@ -687,10 +697,7 @@ bool fetchAllLabelStudioTasksRaw(
             allTasks.push_back(task);
         }
 
-        if (pageTasks->empty() || pageTasks->size() < static_cast<size_t>(pageSize)) {
-            hasMore = false;
-        }
-        if (!hasMore) {
+        if (!shouldFetchNextLabelStudioPage(parsed, pageTasks->size(), pageSize)) {
             break;
         }
     }
@@ -814,20 +821,29 @@ LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
 // with the same token auth as every other call here, writing the raw
 // bytes to `localOutputPath`. Returns false on any failure (network,
 // non-2xx, or the local file couldn't be written), with `error` set.
-bool downloadTaskImage(
-    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
-    const std::string& localOutputPath, std::string& error) {
+bool downloadTaskImageBytes(
+    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath, std::string& outBytes,
+    std::string& error) {
     const std::string url = normalizeBaseUrl(baseUrl) + imagePath;
 
-    std::string responseBody;
     long httpCode = 0;
     std::string networkError;
-    if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+    if (!performGet(url, apiToken, outBytes, httpCode, networkError)) {
         error = networkError;
         return false;
     }
     if (httpCode < 200 || httpCode >= 300) {
         error = "Label Studio returned HTTP " + std::to_string(httpCode) + " downloading " + imagePath;
+        return false;
+    }
+    return true;
+}
+
+bool downloadTaskImage(
+    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
+    const std::string& localOutputPath, std::string& error) {
+    std::string bytes;
+    if (!downloadTaskImageBytes(baseUrl, apiToken, imagePath, bytes, error)) {
         return false;
     }
 
@@ -836,7 +852,7 @@ bool downloadTaskImage(
         error = "Could not open file for writing: " + localOutputPath;
         return false;
     }
-    file.write(responseBody.data(), static_cast<std::streamsize>(responseBody.size()));
+    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     if (!file) {
         error = "Failed to write downloaded image to: " + localOutputPath;
         return false;
@@ -847,18 +863,45 @@ bool downloadTaskImage(
 
 LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
     const std::string& baseUrl, int projectId, const std::string& apiToken,
-    const std::vector<LabelStudioPredictionInput>& predictions) {
+    const std::vector<LabelStudioPredictionInput>& predictions,
+    const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested) {
     LabelStudioPushSummary summary;
+
+    // Snapshot the task count before uploading anything -- selectMostRecentTaskIds
+    // below assumes the project's highest `uploaded.size()` task ids afterward are
+    // exactly the ones this loop just created. That assumption breaks if something
+    // else (a labeler in the UI, another import) creates or removes tasks in this
+    // project while the loop runs; checked below instead of guessed at.
+    nlohmann::json tasksBeforeUpload;
+    std::string countError;
+    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, tasksBeforeUpload, countError)) {
+        summary.error = countError;
+        return summary;
+    }
+    const size_t taskCountBeforeUpload = countLabelStudioTasks(tasksBeforeUpload);
+
+    const int total = static_cast<int>(predictions.size()) * 2; // uploads + an upper bound on attach attempts
+    int completed = 0;
 
     std::vector<const LabelStudioPredictionInput*> uploaded;
     uploaded.reserve(predictions.size());
 
     for (const auto& prediction : predictions) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            return summary;
+        }
+
         std::string uploadError;
         if (uploadImage(baseUrl, projectId, apiToken, prediction.localImagePath, uploadError)) {
             uploaded.push_back(&prediction);
         } else {
             summary.uploadFailed++;
+        }
+
+        completed++;
+        if (onProgress) {
+            onProgress(completed, total);
         }
     }
 
@@ -873,6 +916,14 @@ LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
         return summary;
     }
 
+    if (countLabelStudioTasks(allTasks) != taskCountBeforeUpload + uploaded.size()) {
+        // The project's task count didn't change by exactly what we uploaded, so
+        // something else created or removed tasks concurrently -- selectMostRecentTaskIds'
+        // "top N ids are ours" assumption no longer holds. Refuse to guess a mapping.
+        summary.taskNotResolved += static_cast<int>(uploaded.size());
+        return summary;
+    }
+
     const std::vector<int> recentTaskIds = selectMostRecentTaskIds(allTasks, uploaded.size());
     if (recentTaskIds.size() < uploaded.size()) {
         summary.taskNotResolved += static_cast<int>(uploaded.size());
@@ -880,12 +931,21 @@ LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
     }
 
     for (size_t i = 0; i < uploaded.size(); ++i) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            return summary;
+        }
+
         if (createLabelStudioPredictionInternal(
                 baseUrl, apiToken, recentTaskIds[i], uploaded[i]->resultAndScore.result,
                 uploaded[i]->resultAndScore.score)) {
             summary.created++;
         } else {
             summary.predictionFailed++;
+        }
+
+        completed++;
+        if (onProgress) {
+            onProgress(completed, total);
         }
     }
 
@@ -986,16 +1046,30 @@ LabelStudioTaskImageDownload downloadLabelStudioTaskImages(
 
 LabelStudioAttachSummary attachPredictionsToKnownTasks(
     const std::string& baseUrl, const std::string& apiToken,
-    const std::vector<LabelStudioKnownTaskPrediction>& predictions) {
+    const std::vector<LabelStudioKnownTaskPrediction>& predictions,
+    const std::function<void(int completed, int total)>& onProgress,
+    const std::atomic<bool>* cancelRequested) {
     LabelStudioAttachSummary summary;
 
+    const int total = static_cast<int>(predictions.size());
+    int completed = 0;
+
     for (const auto& prediction : predictions) {
+        if (cancelRequested != nullptr && cancelRequested->load()) {
+            return summary;
+        }
+
         if (createLabelStudioPredictionInternal(
                 baseUrl, apiToken, prediction.taskId, prediction.resultAndScore.result,
                 prediction.resultAndScore.score)) {
             summary.created++;
         } else {
             summary.failed++;
+        }
+
+        completed++;
+        if (onProgress) {
+            onProgress(completed, total);
         }
     }
 

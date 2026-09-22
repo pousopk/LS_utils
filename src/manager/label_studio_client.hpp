@@ -167,11 +167,26 @@ struct LabelStudioProjectListResult {
     std::string error;   // set only on a hard failure (network, non-2xx, unparseable body)
 };
 
+// Pure function: decides whether a paginated Label Studio list fetch
+// (tasks, projects, ...) should request another page, given the page
+// just parsed and how many items it contained. Two response shapes are
+// in play, since this varies by endpoint (and Label Studio version):
+// - DRF-style pagination (e.g. /api/projects/): the response object
+//   always has a "next" key, holding either a URL string (more pages
+//   exist) or null (this was the last page). When present, this key is
+//   authoritative regardless of page size.
+// - Label Studio's native tasks-list shape (/api/tasks/): there is no
+//   "next" key at all, so the only signal is page size -- a full page
+//   (pageItemCount == pageSize) might not be the last one; a short or
+//   empty page (pageItemCount < pageSize) definitely is.
+bool shouldFetchNextLabelStudioPage(const nlohmann::json& parsedPage, size_t pageItemCount, int pageSize);
+
 // Fetches every project visible to this API token via GET
 // {baseUrl}/api/projects/, paginating exactly like
 // fetchAllLabelStudioTasksRaw (page/page_size params, following `next`
-// until exhausted or a short page is seen), then parses the accumulated
-// raw array with parseLabelStudioProjects.
+// until exhausted or a short page is seen, via
+// shouldFetchNextLabelStudioPage), then parses the accumulated raw array
+// with parseLabelStudioProjects.
 LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl, const std::string& apiToken);
 
 // Pure function: parses a Label Studio tasks-list API response --
@@ -180,13 +195,27 @@ LabelStudioProjectListResult fetchLabelStudioProjects(const std::string& baseUrl
 // `count` highest task ids present, sorted ascending (oldest of the
 // selected group first, i.e. chronological creation order). Used to
 // identify "the tasks this push just created": since this app uploads
-// images one at a time, sequentially, with nothing else able to create
-// tasks in the project concurrently during that loop, the tasks it just
-// created are exactly the highest-numbered `count` task ids afterward, in
-// upload order. Returns fewer than `count` entries if the project has
-// fewer than `count` tasks total, or an empty vector if the response is
+// images one at a time, sequentially, this assumes nothing else creates
+// tasks in the project concurrently during that loop, so the tasks it
+// just created are exactly the highest-numbered `count` task ids
+// afterward, in upload order. pushDraftsAsNewLabelStudioTasks checks
+// that assumption via countLabelStudioTasks before trusting this.
+// Returns fewer than `count` entries if the project has fewer than
+// `count` tasks total, or an empty vector if the response is
 // unparseable/malformed.
 std::vector<int> selectMostRecentTaskIds(const nlohmann::json& tasksJson, size_t count);
+
+// Pure function: counts the tasks present in a Label Studio tasks-list
+// API response -- same response-shape tolerance as
+// selectMostRecentTaskIds (bare array, or an object wrapping a "tasks"
+// array). Unlike selectAllTaskSummaries, this doesn't need
+// a dataImageKey and doesn't skip anything; it exists purely so
+// pushDraftsAsNewLabelStudioTasks can detect whether the project's task
+// count changed by more than its own uploads accounted for (i.e.
+// something else created or removed tasks concurrently), in which case
+// selectMostRecentTaskIds' "top N ids are ours" assumption no longer
+// holds. Returns 0 if the response is unparseable/malformed.
+size_t countLabelStudioTasks(const nlohmann::json& tasksJson);
 
 struct LabelStudioPredictionInput {
     std::string imageFilename;                // basename, used only for status/logging
@@ -197,35 +226,53 @@ struct LabelStudioPredictionInput {
 struct LabelStudioPushSummary {
     int created = 0;            // new tasks created with a prediction successfully attached
     int uploadFailed = 0;       // the image upload (multipart POST) itself failed
-    int taskNotResolved = 0;    // uploaded successfully, but its resulting task id couldn't be found afterward
+    int taskNotResolved = 0;    // uploaded successfully, but its resulting task id couldn't be found afterward,
+                                 // or couldn't be trusted (the project's task count changed by more than this
+                                 // push accounted for -- see pushDraftsAsNewLabelStudioTasks)
     int predictionFailed = 0;   // task id resolved, but attaching the prediction to it failed
     std::string error;          // set only on a hard failure (couldn't fetch the task list after uploading at all)
 };
 
-// For each of `predictions`: uploads its image (a real multipart file
-// upload of localImagePath's bytes, not a path reference) to the project
-// via Label Studio's import endpoint, creating a brand-new task -- this
-// app never tries to reuse or match an existing task, so re-running this
-// on the same folder creates duplicate tasks each time. After all uploads
-// complete, fetches the project's tasks once and resolves the resulting
-// task ids via selectMostRecentTaskIds (Label Studio's import response
-// doesn't reliably return task ids directly, and the per-upload id it
-// does return -- file_upload_ids -- turns out not to correspond to the
-// task list's own `file_upload` field, which is a filename string, not
-// that id; there is no confirmed API for translating between the two, so
-// this app relies on upload+task-creation being sequential and
-// exclusively its own instead). For each resolved task, attaches the
-// prediction via Label Studio's Predictions API. If fewer task ids come
-// back than uploads succeeded, every uploaded prediction in this push is
-// counted as unresolved (rather than guessing a partial mapping). Only a
-// failure to fetch the task list after uploading sets `error` and aborts
-// the operation -- individual upload/attach failures are folded into the
-// matching summary counters instead, matching this app's existing
-// "surface a summary, don't fail the whole run over one bad item"
-// convention for folder-scan operations.
+// Fetches the project's task count before doing anything else (see
+// countLabelStudioTasks), then for each of `predictions`: uploads its
+// image (a real multipart file upload of localImagePath's bytes, not a
+// path reference) to the project via Label Studio's import endpoint,
+// creating a brand-new task -- this app never tries to reuse or match an
+// existing task, so re-running this on the same folder creates duplicate
+// tasks each time. After all uploads complete, fetches the project's
+// tasks once more and resolves the resulting task ids via
+// selectMostRecentTaskIds (Label Studio's import response doesn't
+// reliably return task ids directly, and the per-upload id it does
+// return -- file_upload_ids -- turns out not to correspond to the task
+// list's own `file_upload` field, which is a filename string, not that
+// id; there is no confirmed API for translating between the two, so this
+// app relies on upload+task-creation being sequential and exclusively
+// its own instead). Before trusting that resolution, checks that the
+// task count grew by exactly `uploaded.size()`; if it didn't (something
+// else created or removed tasks in this project while the loop ran),
+// every uploaded prediction in this push is counted as unresolved rather
+// than risking attaching a prediction to a task this app didn't create.
+// The same "don't guess a partial mapping" handling applies if fewer
+// task ids come back than uploads succeeded. For each task id that is
+// resolved and trusted, attaches the prediction via Label Studio's
+// Predictions API. Only a failure to fetch the task list (before
+// uploading, or after) sets `error` and aborts the operation --
+// individual upload/attach failures are folded into the matching summary
+// counters instead, matching this app's existing "surface a summary,
+// don't fail the whole run over one bad item" convention for
+// folder-scan operations. `onProgress` is called once per completed
+// upload, then once per completed attach attempt, as a single running
+// count against a fixed `total` of `predictions.size() * 2` (upload
+// attempts + an upper bound on attach attempts, since at most
+// `predictions.size()` uploads can succeed) -- fewer than `total`
+// completions is normal whenever some uploads fail, since those don't
+// get an attach attempt. `cancelRequested` is checked between items in
+// both loops, same as fetchAndDownloadUnlabeledTasks's.
 LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
     const std::string& baseUrl, int projectId, const std::string& apiToken,
-    const std::vector<LabelStudioPredictionInput>& predictions);
+    const std::vector<LabelStudioPredictionInput>& predictions,
+    const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 struct LabelStudioUnlabeledTask {
     int taskId = 0;
@@ -290,9 +337,15 @@ struct LabelStudioAttachSummary {
 // used by "Label Studio Project" source mode, where the task id was
 // already known from the download step. Every attempt is made regardless
 // of earlier failures; `failed` counts individual create failures.
+// `onProgress`/`cancelRequested` behave exactly as
+// fetchAndDownloadUnlabeledTasks's -- checked between predictions, so a
+// cancel mid-batch stops before attaching the rest (already-attached ones
+// are not undone).
 LabelStudioAttachSummary attachPredictionsToKnownTasks(
     const std::string& baseUrl, const std::string& apiToken,
-    const std::vector<LabelStudioKnownTaskPrediction>& predictions);
+    const std::vector<LabelStudioKnownTaskPrediction>& predictions,
+    const std::function<void(int completed, int total)>& onProgress = nullptr,
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 struct LabelStudioLabeledTask {
     int taskId = 0;
@@ -361,6 +414,16 @@ LabelStudioTaskDetail parseLabelStudioTaskDetail(const nlohmann::json& taskJson,
 // and parses it with parseLabelStudioTaskDetail.
 LabelStudioTaskDetail fetchLabelStudioTaskById(
     const std::string& baseUrl, const std::string& apiToken, int taskId, const std::string& dataImageKey);
+
+// Fetches `imagePath`'s raw bytes via GET {baseUrl}{imagePath}, with the
+// same auth as every other call here -- returns the bytes in memory
+// instead of writing them to a file. downloadTaskImage (below) is
+// implemented in terms of this; the Dataset Browser's thumbnail worker
+// uses it directly, decoding straight from memory with no scratch file
+// per thumbnail.
+bool downloadTaskImageBytes(
+    const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath, std::string& outBytes,
+    std::string& error);
 
 // Downloads the image at `{baseUrl}{imagePath}` (imagePath already
 // absolute, e.g. "/data/upload/11/xxx.png", as found in a task's `data`)

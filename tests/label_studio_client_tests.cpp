@@ -313,6 +313,83 @@ void test_parseLabelStudioProjects_notAnArrayReturnsEmpty() {
     CHECK(parseLabelStudioProjects(json).empty());
 }
 
+// Label Studio's native /api/tasks/ response has no "next" key at all
+// (unlike the DRF-paginated /api/projects/ response). A full page there
+// must still be treated as "there may be more" -- this is the exact
+// shape of the bug where task downloads silently stopped at 200 tasks.
+void test_shouldFetchNextLabelStudioPage_nativeShapeFullPageContinues() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 500
+    })");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_nativeShapeShortPageStops() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 150
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/150, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_nativeShapeEmptyPageStops() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 0
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/0, /*pageSize=*/200));
+}
+
+// DRF-paginated shape (e.g. /api/projects/) always has a "next" key, and
+// it's authoritative -- even on a full page, an explicit "next": null
+// means stop.
+void test_shouldFetchNextLabelStudioPage_drfShapeNullNextStopsEvenOnFullPage() {
+    const auto page = nlohmann::json::parse(R"({
+        "count": 200,
+        "next": null,
+        "results": []
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_drfShapeNonNullNextContinues() {
+    const auto page = nlohmann::json::parse(R"({
+        "count": 250,
+        "next": "https://example.com/api/projects/?page=2",
+        "results": []
+    })");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_bareArrayFullPageContinues() {
+    const auto page = nlohmann::json::parse(R"([1, 2, 3])");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/3, /*pageSize=*/3));
+}
+
+// countLabelStudioTasks backs pushDraftsAsNewLabelStudioTasks's guard
+// against another actor creating/removing tasks in the project while
+// this app's own upload loop is running (see selectMostRecentTaskIds).
+void test_countLabelStudioTasks_bareArray() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1}, {"id": 2}, {"id": 3}])");
+    CHECK(countLabelStudioTasks(json) == 3);
+}
+
+void test_countLabelStudioTasks_wrappedInTasks() {
+    const auto json = nlohmann::json::parse(R"({"tasks": [{"id": 1}, {"id": 2}], "total": 2})");
+    CHECK(countLabelStudioTasks(json) == 2);
+}
+
+void test_countLabelStudioTasks_emptyArrayIsZero() {
+    const auto json = nlohmann::json::parse(R"([])");
+    CHECK(countLabelStudioTasks(json) == 0);
+}
+
+void test_countLabelStudioTasks_notAnArrayOrTasksObjectIsZero() {
+    const auto json = nlohmann::json::parse(R"({"detail": "not found"})");
+    CHECK(countLabelStudioTasks(json) == 0);
+}
+
 void test_parseLabelStudioTaskDetail_withAnnotationAndPrediction() {
     const auto task = nlohmann::json::parse(R"({
         "id": 5,
@@ -669,6 +746,16 @@ int main() {
     test_parseLabelStudioProjects_wrappedInResults();
     test_parseLabelStudioProjects_skipsEntriesMissingIdOrTitle();
     test_parseLabelStudioProjects_notAnArrayReturnsEmpty();
+    test_shouldFetchNextLabelStudioPage_nativeShapeFullPageContinues();
+    test_shouldFetchNextLabelStudioPage_nativeShapeShortPageStops();
+    test_shouldFetchNextLabelStudioPage_nativeShapeEmptyPageStops();
+    test_shouldFetchNextLabelStudioPage_drfShapeNullNextStopsEvenOnFullPage();
+    test_shouldFetchNextLabelStudioPage_drfShapeNonNullNextContinues();
+    test_shouldFetchNextLabelStudioPage_bareArrayFullPageContinues();
+    test_countLabelStudioTasks_bareArray();
+    test_countLabelStudioTasks_wrappedInTasks();
+    test_countLabelStudioTasks_emptyArrayIsZero();
+    test_countLabelStudioTasks_notAnArrayOrTasksObjectIsZero();
     test_parseLabelStudioTaskDetail_withAnnotationAndPrediction();
     test_parseLabelStudioTaskDetail_noAnnotationOrPrediction();
     test_parseLabelStudioTaskDetail_missingImageKeyIsError();
