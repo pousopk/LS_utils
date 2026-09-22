@@ -171,3 +171,45 @@ nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const s
 
     return out;
 }
+
+std::vector<DraftDetectionBox> boxesToDrawForTask(
+    const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName, int taskId) {
+    std::vector<DraftDetectionBox> boxes;
+    if (rectangleLabelsFromName.empty()) {
+        return boxes;
+    }
+
+    const nlohmann::json* tasks = &allTasksRaw;
+    if (allTasksRaw.is_object() && allTasksRaw.contains("tasks") && allTasksRaw["tasks"].is_array()) {
+        tasks = &allTasksRaw["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return boxes;
+    }
+
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer() || task["id"].get<int>() != taskId) {
+            continue;
+        }
+
+        if (task.contains("annotations") && task["annotations"].is_array()) {
+            for (const auto& annotation : task["annotations"]) {
+                if (annotation.is_object() && annotation.contains("result")) {
+                    const auto annotationBoxes = parseDetectionResultBoxes(annotation["result"], rectangleLabelsFromName);
+                    boxes.insert(boxes.end(), annotationBoxes.begin(), annotationBoxes.end());
+                }
+            }
+        }
+        if (task.contains("predictions") && task["predictions"].is_array()) {
+            for (const auto& prediction : task["predictions"]) {
+                if (prediction.is_object() && prediction.contains("result")) {
+                    const auto predictionBoxes = parseDetectionResultBoxes(prediction["result"], rectangleLabelsFromName);
+                    boxes.insert(boxes.end(), predictionBoxes.begin(), predictionBoxes.end());
+                }
+            }
+        }
+        break;
+    }
+
+    return boxes;
+}

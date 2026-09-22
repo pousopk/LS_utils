@@ -66,6 +66,14 @@ void syncDatasetBrowserAutoFetch(DatasetBrowserState& state, const LabelStudioSe
         return;
     }
     state.dataImageKey = config.dataImageKey;
+
+    state.rectangleLabelsFromName.clear();
+    for (const auto& tag : config.controlTags) {
+        if (tag.type == LabelStudioControlTagType::RectangleLabels) {
+            state.rectangleLabelsFromName = tag.name;
+            break;
+        }
+    }
     state.thumbnailCache.clear();
     state.thumbnailWorker.setConnection(session.baseUrl, session.apiToken);
 }

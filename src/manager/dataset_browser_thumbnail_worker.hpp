@@ -1,5 +1,7 @@
 #pragma once
 
+#include "manager/label_studio_import.hpp"
+
 #include <opencv2/core.hpp>
 
 #include <atomic>
@@ -18,6 +20,11 @@ constexpr int kDatasetThumbnailMaxDim = 160;
 struct DatasetThumbnailRequest {
     int taskId = 0;
     std::string imagePath;   // task.data[dataImageKey], as returned by Label Studio
+    // Annotation + prediction boxes to draw onto the decoded thumbnail
+    // (via boxesToDrawForTask), in original-image pixel space -- run()
+    // scales these to match the resize it applies before drawing. Empty
+    // if the project has no RectangleLabels tag or this task has no boxes.
+    std::vector<DraftDetectionBox> boxesToDraw;
 };
 
 struct DatasetThumbnailResult {

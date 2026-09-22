@@ -117,7 +117,8 @@ void drawGrid(DatasetBrowserState& state) {
                 state.summaries.begin(), state.summaries.end(),
                 [taskId](const DatasetTaskSummary& s) { return s.taskId == taskId; });
             if (summaryIt != state.summaries.end()) {
-                state.thumbnailWorker.requestThumbnail(DatasetThumbnailRequest{taskId, summaryIt->imagePath});
+                const auto boxes = boxesToDrawForTask(state.rawTasksJson, state.rectangleLabelsFromName, taskId);
+                state.thumbnailWorker.requestThumbnail(DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxes});
             }
         }
     }

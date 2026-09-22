@@ -64,6 +64,11 @@ struct DatasetBrowserState {
     // lastAutoFetchKey-gated pattern as label_assistant_state.cpp --
     // needed to know task.data's image-path field.
     std::string dataImageKey;
+    // from_name of the project's first RectangleLabels control tag, if
+    // any -- passed to boxesToDrawForTask so thumbnails/previews can draw
+    // annotation/prediction boxes. Empty if the project has no such tag
+    // (e.g. classification-only), in which case nothing is drawn.
+    std::string rectangleLabelsFromName;
     std::string lastAutoFetchKey;
 
     DatasetThumbnailWorker thumbnailWorker;

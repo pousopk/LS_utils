@@ -1,5 +1,7 @@
 #pragma once
 
+#include "manager/label_studio_import.hpp"
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <optional>
@@ -70,3 +72,16 @@ std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summa
 // `matchingTaskIds` not found in `allTasksRaw` are silently skipped
 // (defensive; shouldn't happen since both come from the same fetch).
 nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds);
+
+// Pure function: finds `taskId` in `allTasksRaw` (the same raw shape
+// fetchAllLabelStudioTasksRaw produces) and returns every box from its
+// annotations *and* predictions, via parseDetectionResultBoxes with
+// `rectangleLabelsFromName` -- the same result-parsing this app's own
+// Labeling/Label Assistant windows already use, so this stays correct
+// for rotated boxes (parseDetectionResultBoxes handles the `rotation`
+// field the same way regardless of caller) without duplicating that
+// logic. Returns empty if `rectangleLabelsFromName` is empty (the
+// project has no RectangleLabels control tag -- e.g. classification-only
+// -- so there's nothing box-shaped to draw) or the task isn't found.
+std::vector<DraftDetectionBox> boxesToDrawForTask(
+    const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName, int taskId);
