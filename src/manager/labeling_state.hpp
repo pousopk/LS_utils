@@ -5,6 +5,7 @@
 #include "manager/label_studio_import.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/labeling_worker.hpp"
+#include "manager/mask_overlay.hpp"
 #include "manager/rotated_box_geometry.hpp"
 
 #include <GLFW/glfw3.h>
@@ -183,15 +184,9 @@ bool anyEditorDirty(const LabelingState& state);
 // zero objects).
 nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int imageWidth, int imageHeight);
 
-// Blends each region's mask onto a copy of `baseImage` (expected 3-channel
-// BGR, matching cv::imread's default), tinted by colorForClassName, at a
-// fixed alpha -- for visual display only, never written back to
-// annotation data. Regions with an empty mask, or one whose size doesn't
-// match baseImage's, are skipped (not an error -- a freshly-created
-// region's mask matches the image by construction; a mismatch here would
-// only happen from a bug elsewhere, and silently skipping is safer than
-// crashing the display). Pure pixel manipulation, no GL/ImGui.
-cv::Mat compositeMaskOverlay(const cv::Mat& baseImage, const std::vector<DraftBrushRegion>& regions);
+// compositeMaskOverlay moved to mask_overlay.hpp (a dependency-light
+// module the Dataset Browser also uses) -- re-exported here via this
+// include so existing callers of labeling_state.hpp don't need to change.
 
 // Called once per main-loop iteration while the Labeling window is open.
 // Lazily (re)fetches state.projectConfig whenever
