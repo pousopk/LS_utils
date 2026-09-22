@@ -12,12 +12,17 @@
 #include <vector>
 
 // The longer side a downloaded image is resized to before being handed
-// back for texture upload -- large enough that the detail panel's 280px
-// enlarged preview (see dataset_browser_window.cpp) is a downscale, not
-// an upscale (upscaling a too-small thumbnail is what made it look
-// blurry there), while still keeping hundreds resident at once
-// affordable (see DatasetThumbnailCache's kResidentCap).
-constexpr int kDatasetThumbnailMaxDim = 320;
+// back for texture upload. 480 (up from an earlier 320, still not
+// enough headroom above the detail panel's 280px enlarged preview --
+// see dataset_browser_window.cpp -- to look sharp once GL_LINEAR
+// filtering and the initial cv::INTER_AREA downsize are both in play):
+// at DatasetThumbnailCache::kResidentCap's 300 resident textures, this
+// is ~198MB of worst-case (square) texture VRAM, ~2.25x the download/
+// decode cost per thumbnail versus 320. Chosen as the point where the
+// detail panel is comfortably sharp without the memory/bandwidth cost
+// of going further (640+) for a preview that's only ever shown at
+// 280px anyway.
+constexpr int kDatasetThumbnailMaxDim = 480;
 
 struct DatasetThumbnailRequest {
     int taskId = 0;
