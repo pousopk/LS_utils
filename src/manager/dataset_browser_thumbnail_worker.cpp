@@ -1,6 +1,8 @@
 #include "manager/dataset_browser_thumbnail_worker.hpp"
 
+#include "manager/label_color.hpp"
 #include "manager/label_studio_client.hpp"
+#include "manager/rotated_box_geometry.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -11,22 +13,48 @@
 
 namespace {
 
-// Rescales `boxes` (in original-image pixel space) by `scale` -- the
-// same factor run() resized the decoded image by -- so the returned
-// boxes are consistent with the (possibly resized) thumbnail's own pixel
-// space. Rotation is scale-invariant, so only box.box and className
-// carry through unchanged.
-std::vector<DraftDetectionBox> scaleBoxesToThumbnail(const std::vector<DraftDetectionBox>& boxes, double scale) {
-    std::vector<DraftDetectionBox> scaled;
-    scaled.reserve(boxes.size());
+// Draws `boxes` (in original-image pixel space) onto `image`, scaling
+// each box by `scale` first (the same factor run() resized the decoded
+// image by) -- small, thin strokes tuned for a thumbnail, not
+// annotateDetections's thicker defaults (tuned for a full-size preview
+// frame). Colored per class name via colorForClassName, matching the
+// Labeling window's convention -- LabelColor is RGB, cv::Mat here is
+// BGR (cv::imdecode's default), so r/b are swapped when building the
+// cv::Scalar, same conversion labeling_state.cpp's mask-overlay tinting
+// already uses. No confidence percentage in the label:
+// parseDetectionResultBoxes leaves DraftDetectionBox::confidence at 0
+// for both annotations and predictions (this app's own convention, see
+// its doc comment), so printing it would show a misleading "0%" on
+// every box.
+void drawBoxesOnThumbnail(cv::Mat& image, const std::vector<DraftDetectionBox>& boxes, double scale) {
     for (const auto& box : boxes) {
-        DraftDetectionBox scaledBox = box;
-        scaledBox.box = cv::Rect(
+        const LabelColor labelColor = colorForClassName(box.className);
+        const cv::Scalar color(labelColor.b, labelColor.g, labelColor.r);
+
+        const cv::Rect scaledBox(
             static_cast<int>(std::lround(box.box.x * scale)), static_cast<int>(std::lround(box.box.y * scale)),
             static_cast<int>(std::lround(box.box.width * scale)), static_cast<int>(std::lround(box.box.height * scale)));
-        scaled.push_back(std::move(scaledBox));
+
+        if (box.rotationDegrees == 0.0f) {
+            cv::rectangle(image, scaledBox, color, 1);
+        } else {
+            const auto corners = rotatedBoxCorners(scaledBox, box.rotationDegrees);
+            std::vector<cv::Point> intCorners;
+            intCorners.reserve(corners.size());
+            for (const auto& corner : corners) {
+                intCorners.emplace_back(
+                    static_cast<int>(std::lround(corner.x)), static_cast<int>(std::lround(corner.y)));
+            }
+            const cv::Point* pts = intCorners.data();
+            const int numPts = static_cast<int>(intCorners.size());
+            cv::polylines(image, &pts, &numPts, 1, /*isClosed=*/true, color, 1);
+        }
+
+        if (!box.className.empty()) {
+            const cv::Point labelOrigin(scaledBox.x, std::max(10, scaledBox.y - 2));
+            cv::putText(image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv::LINE_AA);
+        }
     }
-    return scaled;
 }
 
 } // namespace
@@ -124,8 +152,7 @@ void DatasetThumbnailWorker::run() {
                 } else {
                     resized = decoded;
                 }
-                result.annotationBoxes = scaleBoxesToThumbnail(request.annotationBoxes, effectiveScale);
-                result.predictionBoxes = scaleBoxesToThumbnail(request.predictionBoxes, effectiveScale);
+                drawBoxesOnThumbnail(resized, request.boxesToDraw, effectiveScale);
                 result.thumbnail = resized;
                 result.success = true;
             }

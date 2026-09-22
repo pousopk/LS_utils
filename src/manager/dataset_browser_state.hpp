@@ -16,21 +16,13 @@
 
 enum class DatasetExportState { NotStarted, Running, Complete, Cancelled };
 
+enum class DatasetBoxOverlayMode { Annotations, Predictions };
+
 struct DatasetThumbnailEntry {
     GLuint texture = 0;
     int textureWidth = 0;
     int textureHeight = 0;
     DatasetThumbnailStatus status = DatasetThumbnailStatus::Loading;
-    // In this entry's own texture pixel space (i.e. consistent with
-    // textureWidth/textureHeight) -- the window layer scales these once
-    // more, to on-screen space, when drawing the overlay (see
-    // dataset_browser_window.cpp, mirroring labeling_window.cpp's
-    // drawBoxOverlay). Colored by colorForClassName, not by which list
-    // they're in -- annotationBoxes/predictionBoxes only exist as
-    // separate lists so showAnnotationBoxes/showPredictionBoxes can hide
-    // either independently.
-    std::vector<DraftDetectionBox> annotationBoxes;
-    std::vector<DraftDetectionBox> predictionBoxes;
 };
 
 // Resident thumbnail textures, keyed by task id, plus their LRU order
@@ -84,11 +76,15 @@ struct DatasetBrowserState {
     DatasetThumbnailWorker thumbnailWorker;
     DatasetThumbnailCache thumbnailCache;
     std::optional<int> selectedTaskId;
-    // Independent display toggles for the box overlay -- both default on.
-    // Unlike `filter`, these don't change which tasks match; they only
-    // control what the grid/detail-panel overlay draws.
-    bool showAnnotationBoxes = true;
-    bool showPredictionBoxes = true;
+    // Which box list gets baked into thumbnails -- one or the other, not
+    // both (this app's boxes are baked into the image at decode time, so
+    // showing both would need per-box coloring by source as well as by
+    // class, which is harder to read than picking one set to look at).
+    // Defaults to Annotations. Changing this doesn't retroactively
+    // redraw already-cached thumbnails -- the caller (see
+    // dataset_browser_window.cpp) clears thumbnailCache when it changes
+    // so everything re-fetches with the new selection baked in.
+    DatasetBoxOverlayMode boxOverlayMode = DatasetBoxOverlayMode::Annotations;
 
     std::string exportDestinationFolder;
     bool exportFolderPickerOpen = false;
