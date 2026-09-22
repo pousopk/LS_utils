@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/label_color.hpp"
 #include "manager/label_studio_client.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/label_studio_session.hpp"
@@ -29,19 +30,9 @@ struct BoxLabelEditorState {
     std::string pendingNewBoxLabel;
 };
 
-struct LabelColor {
-    unsigned char r = 200;
-    unsigned char g = 200;
-    unsigned char b = 200;
-};
-
-// Pure function: deterministically maps a class name to a distinct,
-// visually stable color -- the same name always produces the same color
-// (hash of the name -> hue, fixed saturation/value), with no per-project
-// color configuration needed. Kept free of ImGui so it's testable in
-// isolation; the widget layer converts LabelColor to whatever pixel
-// format it needs (e.g. IM_COL32).
-LabelColor colorForClassName(const std::string& className);
+// LabelColor/colorForClassName moved to label_color.hpp (a dependency-light
+// module the Dataset Browser also uses) -- re-exported here via this
+// include so existing callers of labeling_state.hpp don't need to change.
 
 // Pure function: true if `point` (image space) falls inside `box` once
 // rotation is accounted for -- inverse-rotates `point` into the box's own
