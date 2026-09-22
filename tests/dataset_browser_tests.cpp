@@ -207,6 +207,31 @@ void test_filterDatasetTasks_allDefaultsMatchesEverything() {
     CHECK(filterDatasetTasks(summaries, DatasetFilterSpec{}).size() == 2);
 }
 
+void test_buildDatasetExportJson_returnsOnlyMatchingTasks() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"}},
+        {"id": 2, "data": {"image": "/b.jpg"}},
+        {"id": 3, "data": {"image": "/c.jpg"}}
+    ])");
+    const auto exported = buildDatasetExportJson(json, {1, 3});
+    CHECK(exported.size() == 2);
+    CHECK(exported[0]["id"] == 1);
+    CHECK(exported[1]["id"] == 3);
+}
+
+void test_buildDatasetExportJson_emptyMatchingIdsReturnsEmptyArray() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1, "data": {"image": "/a.jpg"}}])");
+    CHECK(buildDatasetExportJson(json, {}).empty());
+}
+
+void test_buildDatasetExportJson_preservesTaskObjectUnmodified() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"}, "annotations": [{"id": 9, "result": []}]}
+    ])");
+    const auto exported = buildDatasetExportJson(json, {1});
+    CHECK(exported[0]["annotations"][0]["id"] == 9);
+}
+
 } // namespace
 
 int main() {
@@ -227,6 +252,9 @@ int main() {
     test_filterDatasetTasks_confidenceFilterExcludesTasksWithNoPrediction();
     test_filterDatasetTasks_combinesMultipleDimensions();
     test_filterDatasetTasks_allDefaultsMatchesEverything();
+    test_buildDatasetExportJson_returnsOnlyMatchingTasks();
+    test_buildDatasetExportJson_emptyMatchingIdsReturnsEmptyArray();
+    test_buildDatasetExportJson_preservesTaskObjectUnmodified();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
