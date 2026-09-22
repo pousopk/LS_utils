@@ -259,6 +259,64 @@ void test_idsToEvict_exactlyAtCapEvictsNothing() {
     CHECK(idsToEvict({1, 2}, {}, 2).empty());
 }
 
+void test_boxesToDrawForTask_collectsAnnotationAndPredictionBoxes() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"},
+         "annotations": [{"result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0, "rectanglelabels": ["Cat"]}}
+         ]}],
+         "predictions": [{"score": 0.9, "result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 50.0, "y": 50.0, "width": 10.0, "height": 10.0, "rectanglelabels": ["Dog"]}}
+         ]}]}
+    ])");
+    const auto boxes = boxesToDrawForTask(json, "label", 1);
+    CHECK(boxes.size() == 2);
+    CHECK(boxes[0].className == "Cat");
+    CHECK(boxes[1].className == "Dog");
+}
+
+void test_boxesToDrawForTask_ignoresResultsWithDifferentFromName() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"},
+         "annotations": [{"result": [
+             {"type": "rectanglelabels", "from_name": "other_label", "original_width": 100, "original_height": 100,
+              "value": {"x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0, "rectanglelabels": ["Cat"]}}
+         ]}]}
+    ])");
+    CHECK(boxesToDrawForTask(json, "label", 1).empty());
+}
+
+void test_boxesToDrawForTask_emptyFromNameReturnsNothing() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"},
+         "annotations": [{"result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0, "rectanglelabels": ["Cat"]}}
+         ]}]}
+    ])");
+    CHECK(boxesToDrawForTask(json, "", 1).empty());
+}
+
+void test_boxesToDrawForTask_taskNotFoundReturnsEmpty() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1, "data": {"image": "/a.jpg"}}])");
+    CHECK(boxesToDrawForTask(json, "label", 999).empty());
+}
+
+void test_boxesToDrawForTask_preservesRotation() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"},
+         "annotations": [{"result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0, "rotation": 45.0, "rectanglelabels": ["Cat"]}}
+         ]}]}
+    ])");
+    const auto boxes = boxesToDrawForTask(json, "label", 1);
+    CHECK(boxes.size() == 1);
+    CHECK(boxes[0].rotationDegrees == 45.0f);
+}
+
 } // namespace
 
 int main() {
@@ -287,6 +345,11 @@ int main() {
     test_idsToEvict_neverEvictsCurrentlyVisibleIds();
     test_idsToEvict_visibleIdsAloneOverCapEvictsOnlyNonVisible();
     test_idsToEvict_exactlyAtCapEvictsNothing();
+    test_boxesToDrawForTask_collectsAnnotationAndPredictionBoxes();
+    test_boxesToDrawForTask_ignoresResultsWithDifferentFromName();
+    test_boxesToDrawForTask_emptyFromNameReturnsNothing();
+    test_boxesToDrawForTask_taskNotFoundReturnsEmpty();
+    test_boxesToDrawForTask_preservesRotation();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

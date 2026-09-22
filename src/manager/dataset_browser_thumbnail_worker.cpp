@@ -1,12 +1,56 @@
 #include "manager/dataset_browser_thumbnail_worker.hpp"
 
 #include "manager/label_studio_client.hpp"
+#include "manager/rotated_box_geometry.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+
+namespace {
+
+// Draws `boxes` (in original-image pixel space) onto `image`, scaling
+// each box by `scale` first (the same factor run() resized the decoded
+// image by) -- small, thin strokes tuned for a ~160px thumbnail, not
+// annotateDetections's thicker defaults (tuned for a full-size preview
+// frame). No confidence percentage in the label: parseDetectionResultBoxes
+// leaves DraftDetectionBox::confidence at 0 for both annotations and
+// predictions (this app's own convention, see its doc comment), so
+// printing it would show a misleading "0%" on every box.
+void drawBoxesOnThumbnail(cv::Mat& image, const std::vector<DraftDetectionBox>& boxes, double scale) {
+    for (const auto& box : boxes) {
+        const cv::Rect scaledBox(
+            static_cast<int>(std::lround(box.box.x * scale)), static_cast<int>(std::lround(box.box.y * scale)),
+            static_cast<int>(std::lround(box.box.width * scale)), static_cast<int>(std::lround(box.box.height * scale)));
+
+        if (box.rotationDegrees == 0.0f) {
+            cv::rectangle(image, scaledBox, cv::Scalar(0, 255, 0), 1);
+        } else {
+            const auto corners = rotatedBoxCorners(scaledBox, box.rotationDegrees);
+            std::vector<cv::Point> intCorners;
+            intCorners.reserve(corners.size());
+            for (const auto& corner : corners) {
+                intCorners.emplace_back(
+                    static_cast<int>(std::lround(corner.x)), static_cast<int>(std::lround(corner.y)));
+            }
+            const cv::Point* pts = intCorners.data();
+            const int numPts = static_cast<int>(intCorners.size());
+            cv::polylines(image, &pts, &numPts, 1, /*isClosed=*/true, cv::Scalar(0, 255, 0), 1);
+        }
+
+        if (!box.className.empty()) {
+            const cv::Point labelOrigin(scaledBox.x, std::max(10, scaledBox.y - 2));
+            cv::putText(
+                image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, cv::Scalar(0, 255, 0), 1,
+                cv::LINE_AA);
+        }
+    }
+}
+
+} // namespace
 
 DatasetThumbnailWorker::DatasetThumbnailWorker() {
     thread_ = std::thread(&DatasetThumbnailWorker::run, this);
@@ -91,14 +135,17 @@ void DatasetThumbnailWorker::run() {
             const std::vector<uchar> buffer(bytes.begin(), bytes.end());
             const cv::Mat decoded = cv::imdecode(buffer, cv::IMREAD_COLOR);
             if (!decoded.empty()) {
-                const double scale = static_cast<double>(kDatasetThumbnailMaxDim)
+                const double computedScale = static_cast<double>(kDatasetThumbnailMaxDim)
                     / static_cast<double>(std::max(decoded.cols, decoded.rows));
                 cv::Mat resized;
-                if (scale < 1.0) {
-                    cv::resize(decoded, resized, cv::Size(), scale, scale, cv::INTER_AREA);
+                double effectiveScale = 1.0;
+                if (computedScale < 1.0) {
+                    cv::resize(decoded, resized, cv::Size(), computedScale, computedScale, cv::INTER_AREA);
+                    effectiveScale = computedScale;
                 } else {
                     resized = decoded;
                 }
+                drawBoxesOnThumbnail(resized, request.boxesToDraw, effectiveScale);
                 result.thumbnail = resized;
                 result.success = true;
             }
