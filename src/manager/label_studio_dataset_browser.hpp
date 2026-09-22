@@ -73,10 +73,11 @@ std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summa
 // (defensive; shouldn't happen since both come from the same fetch).
 nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds);
 
-// Kept separate (rather than one merged list) so callers can draw
-// annotations and predictions in different colors -- otherwise there's
-// no way to tell ground truth from a model's guess just by looking at
-// the image.
+// Kept separate (rather than one merged list) so callers can pick just
+// one -- the Dataset Browser only ever bakes annotations *or*
+// predictions into a thumbnail at a time (DatasetBoxOverlayMode), never
+// both, since it colors boxes by class name rather than by source and
+// mixing both lists together would make that ambiguous to read.
 struct DatasetBoxesToDraw {
     std::vector<DraftDetectionBox> annotationBoxes;
     std::vector<DraftDetectionBox> predictionBoxes;
@@ -94,3 +95,23 @@ struct DatasetBoxesToDraw {
 // -- so there's nothing box-shaped to draw) or the task isn't found.
 DatasetBoxesToDraw boxesToDrawForTask(
     const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName, int taskId);
+
+// Same split as DatasetBoxesToDraw, for brush masks.
+struct DatasetMasksToDraw {
+    std::vector<DraftBrushRegion> annotationMasks;
+    std::vector<DraftBrushRegion> predictionMasks;
+};
+
+// Pure function: finds `taskId` in `allTasksRaw` and returns its
+// annotation masks and prediction masks separately, via
+// parseBrushResultRegions with `brushLabelsFromName` -- mirrors
+// boxesToDrawForTask exactly, one result type (BrushLabels) instead of
+// another (RectangleLabels). Each DraftBrushRegion's mask is CV_8UC1 at
+// the image's original resolution (from that result item's own
+// original_width/original_height, same per-item convention
+// parseDetectionResultBoxes uses); the caller resizes it to whatever
+// target size it's compositing onto. Both lists are empty if
+// `brushLabelsFromName` is empty (the project has no BrushLabels control
+// tag) or the task isn't found.
+DatasetMasksToDraw masksToDrawForTask(
+    const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName, int taskId);

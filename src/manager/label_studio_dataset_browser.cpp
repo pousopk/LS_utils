@@ -213,3 +213,45 @@ DatasetBoxesToDraw boxesToDrawForTask(
 
     return out;
 }
+
+DatasetMasksToDraw masksToDrawForTask(
+    const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName, int taskId) {
+    DatasetMasksToDraw out;
+    if (brushLabelsFromName.empty()) {
+        return out;
+    }
+
+    const nlohmann::json* tasks = &allTasksRaw;
+    if (allTasksRaw.is_object() && allTasksRaw.contains("tasks") && allTasksRaw["tasks"].is_array()) {
+        tasks = &allTasksRaw["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return out;
+    }
+
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer() || task["id"].get<int>() != taskId) {
+            continue;
+        }
+
+        if (task.contains("annotations") && task["annotations"].is_array()) {
+            for (const auto& annotation : task["annotations"]) {
+                if (annotation.is_object() && annotation.contains("result")) {
+                    const auto annotationMasks = parseBrushResultRegions(annotation["result"], brushLabelsFromName);
+                    out.annotationMasks.insert(out.annotationMasks.end(), annotationMasks.begin(), annotationMasks.end());
+                }
+            }
+        }
+        if (task.contains("predictions") && task["predictions"].is_array()) {
+            for (const auto& prediction : task["predictions"]) {
+                if (prediction.is_object() && prediction.contains("result")) {
+                    const auto predictionMasks = parseBrushResultRegions(prediction["result"], brushLabelsFromName);
+                    out.predictionMasks.insert(out.predictionMasks.end(), predictionMasks.begin(), predictionMasks.end());
+                }
+            }
+        }
+        break;
+    }
+
+    return out;
+}

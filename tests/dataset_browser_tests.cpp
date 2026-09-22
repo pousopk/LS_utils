@@ -324,6 +324,61 @@ void test_boxesToDrawForTask_preservesRotation() {
     CHECK(boxes[0].rotationDegrees == 45.0f);
 }
 
+nlohmann::json brushResultItem(const std::vector<int>& rle, const std::string& fromName, const std::string& className) {
+    nlohmann::json item;
+    item["type"] = "brushlabels";
+    item["from_name"] = fromName;
+    item["original_width"] = 2;
+    item["original_height"] = 2;
+    item["value"]["rle"] = rle;
+    item["value"]["brushlabels"] = nlohmann::json::array({className});
+    return item;
+}
+
+void test_masksToDrawForTask_separatesAnnotationAndPredictionMasks() {
+    const cv::Mat mask(2, 2, CV_8UC1, cv::Scalar(255));
+    const std::vector<int> rle = encodeMaskToLabelStudioRle(mask);
+
+    nlohmann::json task;
+    task["id"] = 1;
+    task["data"]["image"] = "/a.jpg";
+    task["annotations"] = nlohmann::json::array(
+        {nlohmann::json{{"result", nlohmann::json::array({brushResultItem(rle, "mask", "Cat")})}}});
+    task["predictions"] = nlohmann::json::array(
+        {nlohmann::json{{"result", nlohmann::json::array({brushResultItem(rle, "mask", "Dog")})}}});
+
+    const auto json = nlohmann::json::array({task});
+    const auto masks = masksToDrawForTask(json, "mask", 1);
+    CHECK(masks.annotationMasks.size() == 1);
+    CHECK(masks.annotationMasks[0].className == "Cat");
+    CHECK(!masks.annotationMasks[0].mask.empty());
+    CHECK(masks.predictionMasks.size() == 1);
+    CHECK(masks.predictionMasks[0].className == "Dog");
+}
+
+void test_masksToDrawForTask_emptyFromNameReturnsNothing() {
+    const cv::Mat mask(2, 2, CV_8UC1, cv::Scalar(255));
+    const std::vector<int> rle = encodeMaskToLabelStudioRle(mask);
+
+    nlohmann::json task;
+    task["id"] = 1;
+    task["data"]["image"] = "/a.jpg";
+    task["annotations"] = nlohmann::json::array(
+        {nlohmann::json{{"result", nlohmann::json::array({brushResultItem(rle, "mask", "Cat")})}}});
+
+    const auto json = nlohmann::json::array({task});
+    const auto masks = masksToDrawForTask(json, "", 1);
+    CHECK(masks.annotationMasks.empty());
+    CHECK(masks.predictionMasks.empty());
+}
+
+void test_masksToDrawForTask_taskNotFoundReturnsEmpty() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1, "data": {"image": "/a.jpg"}}])");
+    const auto masks = masksToDrawForTask(json, "mask", 999);
+    CHECK(masks.annotationMasks.empty());
+    CHECK(masks.predictionMasks.empty());
+}
+
 } // namespace
 
 int main() {
@@ -357,6 +412,9 @@ int main() {
     test_boxesToDrawForTask_emptyFromNameReturnsNothing();
     test_boxesToDrawForTask_taskNotFoundReturnsEmpty();
     test_boxesToDrawForTask_preservesRotation();
+    test_masksToDrawForTask_separatesAnnotationAndPredictionMasks();
+    test_masksToDrawForTask_emptyFromNameReturnsNothing();
+    test_masksToDrawForTask_taskNotFoundReturnsEmpty();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
