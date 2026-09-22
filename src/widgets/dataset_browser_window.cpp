@@ -26,7 +26,6 @@ void drawFilterControls(DatasetBrowserState& state) {
         state.filter.annotationFilter = static_cast<DatasetPresenceFilter>(annotationIndex);
         filterChanged = true;
     }
-    ImGui::SameLine();
     int predictionIndex = static_cast<int>(state.filter.predictionFilter);
     if (ImGui::Combo("Prediction", &predictionIndex, kPresenceLabels, IM_ARRAYSIZE(kPresenceLabels))) {
         state.filter.predictionFilter = static_cast<DatasetPresenceFilter>(predictionIndex);
