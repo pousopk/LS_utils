@@ -12,22 +12,23 @@
 
 namespace {
 
-// Draws `boxes` (in original-image pixel space) onto `image`, scaling
-// each box by `scale` first (the same factor run() resized the decoded
-// image by) -- small, thin strokes tuned for a ~160px thumbnail, not
+// Draws `boxes` (in original-image pixel space) onto `image` in `color`,
+// scaling each box by `scale` first (the same factor run() resized the
+// decoded image by) -- small, thin strokes tuned for a thumbnail, not
 // annotateDetections's thicker defaults (tuned for a full-size preview
 // frame). No confidence percentage in the label: parseDetectionResultBoxes
 // leaves DraftDetectionBox::confidence at 0 for both annotations and
 // predictions (this app's own convention, see its doc comment), so
 // printing it would show a misleading "0%" on every box.
-void drawBoxesOnThumbnail(cv::Mat& image, const std::vector<DraftDetectionBox>& boxes, double scale) {
+void drawBoxesOnThumbnail(
+    cv::Mat& image, const std::vector<DraftDetectionBox>& boxes, double scale, const cv::Scalar& color) {
     for (const auto& box : boxes) {
         const cv::Rect scaledBox(
             static_cast<int>(std::lround(box.box.x * scale)), static_cast<int>(std::lround(box.box.y * scale)),
             static_cast<int>(std::lround(box.box.width * scale)), static_cast<int>(std::lround(box.box.height * scale)));
 
         if (box.rotationDegrees == 0.0f) {
-            cv::rectangle(image, scaledBox, cv::Scalar(0, 255, 0), 1);
+            cv::rectangle(image, scaledBox, color, 1);
         } else {
             const auto corners = rotatedBoxCorners(scaledBox, box.rotationDegrees);
             std::vector<cv::Point> intCorners;
@@ -38,17 +39,22 @@ void drawBoxesOnThumbnail(cv::Mat& image, const std::vector<DraftDetectionBox>& 
             }
             const cv::Point* pts = intCorners.data();
             const int numPts = static_cast<int>(intCorners.size());
-            cv::polylines(image, &pts, &numPts, 1, /*isClosed=*/true, cv::Scalar(0, 255, 0), 1);
+            cv::polylines(image, &pts, &numPts, 1, /*isClosed=*/true, color, 1);
         }
 
         if (!box.className.empty()) {
             const cv::Point labelOrigin(scaledBox.x, std::max(10, scaledBox.y - 2));
-            cv::putText(
-                image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, cv::Scalar(0, 255, 0), 1,
-                cv::LINE_AA);
+            cv::putText(image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv::LINE_AA);
         }
     }
 }
+
+// Ground truth (annotation) boxes in green, matching this app's only
+// other box-drawing convention (annotateDetections, model_evaluation_state.cpp).
+// Predictions get a distinct orange so the two are never confused with
+// each other on the same image.
+const cv::Scalar kAnnotationBoxColor(0, 255, 0);
+const cv::Scalar kPredictionBoxColor(0, 165, 255);
 
 } // namespace
 
@@ -145,7 +151,8 @@ void DatasetThumbnailWorker::run() {
                 } else {
                     resized = decoded;
                 }
-                drawBoxesOnThumbnail(resized, request.boxesToDraw, effectiveScale);
+                drawBoxesOnThumbnail(resized, request.annotationBoxes, effectiveScale, kAnnotationBoxColor);
+                drawBoxesOnThumbnail(resized, request.predictionBoxes, effectiveScale, kPredictionBoxColor);
                 result.thumbnail = resized;
                 result.success = true;
             }

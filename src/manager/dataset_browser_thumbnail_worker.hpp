@@ -12,19 +12,24 @@
 #include <vector>
 
 // The longer side a downloaded image is resized to before being handed
-// back for texture upload -- small enough that hundreds can be resident
-// at once without exhausting VRAM (see DatasetThumbnailCache's
-// kResidentCap), large enough to still be recognizable in a grid cell.
-constexpr int kDatasetThumbnailMaxDim = 160;
+// back for texture upload -- large enough that the detail panel's 280px
+// enlarged preview (see dataset_browser_window.cpp) is a downscale, not
+// an upscale (upscaling a too-small thumbnail is what made it look
+// blurry there), while still keeping hundreds resident at once
+// affordable (see DatasetThumbnailCache's kResidentCap).
+constexpr int kDatasetThumbnailMaxDim = 320;
 
 struct DatasetThumbnailRequest {
     int taskId = 0;
     std::string imagePath;   // task.data[dataImageKey], as returned by Label Studio
     // Annotation + prediction boxes to draw onto the decoded thumbnail
     // (via boxesToDrawForTask), in original-image pixel space -- run()
-    // scales these to match the resize it applies before drawing. Empty
-    // if the project has no RectangleLabels tag or this task has no boxes.
-    std::vector<DraftDetectionBox> boxesToDraw;
+    // scales these to match the resize it applies before drawing, and
+    // draws each list in its own color so ground truth and a model's
+    // guess stay visually distinguishable. Empty if the project has no
+    // RectangleLabels tag or this task has no boxes of that kind.
+    std::vector<DraftDetectionBox> annotationBoxes;
+    std::vector<DraftDetectionBox> predictionBoxes;
 };
 
 struct DatasetThumbnailResult {

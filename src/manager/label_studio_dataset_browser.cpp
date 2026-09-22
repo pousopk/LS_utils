@@ -172,11 +172,11 @@ nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const s
     return out;
 }
 
-std::vector<DraftDetectionBox> boxesToDrawForTask(
+DatasetBoxesToDraw boxesToDrawForTask(
     const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName, int taskId) {
-    std::vector<DraftDetectionBox> boxes;
+    DatasetBoxesToDraw out;
     if (rectangleLabelsFromName.empty()) {
-        return boxes;
+        return out;
     }
 
     const nlohmann::json* tasks = &allTasksRaw;
@@ -184,7 +184,7 @@ std::vector<DraftDetectionBox> boxesToDrawForTask(
         tasks = &allTasksRaw["tasks"];
     }
     if (!tasks->is_array()) {
-        return boxes;
+        return out;
     }
 
     for (const auto& task : *tasks) {
@@ -196,7 +196,7 @@ std::vector<DraftDetectionBox> boxesToDrawForTask(
             for (const auto& annotation : task["annotations"]) {
                 if (annotation.is_object() && annotation.contains("result")) {
                     const auto annotationBoxes = parseDetectionResultBoxes(annotation["result"], rectangleLabelsFromName);
-                    boxes.insert(boxes.end(), annotationBoxes.begin(), annotationBoxes.end());
+                    out.annotationBoxes.insert(out.annotationBoxes.end(), annotationBoxes.begin(), annotationBoxes.end());
                 }
             }
         }
@@ -204,12 +204,12 @@ std::vector<DraftDetectionBox> boxesToDrawForTask(
             for (const auto& prediction : task["predictions"]) {
                 if (prediction.is_object() && prediction.contains("result")) {
                     const auto predictionBoxes = parseDetectionResultBoxes(prediction["result"], rectangleLabelsFromName);
-                    boxes.insert(boxes.end(), predictionBoxes.begin(), predictionBoxes.end());
+                    out.predictionBoxes.insert(out.predictionBoxes.end(), predictionBoxes.begin(), predictionBoxes.end());
                 }
             }
         }
         break;
     }
 
-    return boxes;
+    return out;
 }
