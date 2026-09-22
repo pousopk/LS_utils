@@ -16,7 +16,7 @@
 
 enum class DatasetExportState { NotStarted, Running, Complete, Cancelled };
 
-enum class DatasetBoxOverlayMode { Annotations, Predictions };
+enum class DatasetOverlayMode { Annotations, Predictions };
 
 struct DatasetThumbnailEntry {
     GLuint texture = 0;
@@ -66,25 +66,30 @@ struct DatasetBrowserState {
     // lastAutoFetchKey-gated pattern as label_assistant_state.cpp --
     // needed to know task.data's image-path field.
     std::string dataImageKey;
-    // from_name of the project's first RectangleLabels control tag, if
-    // any -- passed to boxesToDrawForTask so thumbnails/previews can draw
-    // annotation/prediction boxes. Empty if the project has no such tag
-    // (e.g. classification-only), in which case nothing is drawn.
+    // from_name of the project's first RectangleLabels/BrushLabels
+    // control tag, if any -- passed to boxesToDrawForTask/
+    // masksToDrawForTask so thumbnails/previews can draw annotation/
+    // prediction boxes and masks. Empty if the project has no such tag,
+    // in which case nothing of that kind is drawn (a classification-only
+    // project has neither; a detection-only project has boxes but no
+    // masks, etc.).
     std::string rectangleLabelsFromName;
+    std::string brushLabelsFromName;
     std::string lastAutoFetchKey;
 
     DatasetThumbnailWorker thumbnailWorker;
     DatasetThumbnailCache thumbnailCache;
     std::optional<int> selectedTaskId;
-    // Which box list gets baked into thumbnails -- one or the other, not
-    // both (this app's boxes are baked into the image at decode time, so
-    // showing both would need per-box coloring by source as well as by
-    // class, which is harder to read than picking one set to look at).
-    // Defaults to Annotations. Changing this doesn't retroactively
-    // redraw already-cached thumbnails -- the caller (see
-    // dataset_browser_window.cpp) clears thumbnailCache when it changes
-    // so everything re-fetches with the new selection baked in.
-    DatasetBoxOverlayMode boxOverlayMode = DatasetBoxOverlayMode::Annotations;
+    // Which set of boxes and masks gets baked into thumbnails --
+    // annotations or predictions, not both (everything's baked into the
+    // image at decode time and colored by class name, so showing both
+    // sources at once would need coloring by source too, which is harder
+    // to read than picking one set to look at). Defaults to Annotations.
+    // Changing this doesn't retroactively redraw already-cached
+    // thumbnails -- the caller (see dataset_browser_window.cpp) clears
+    // thumbnailCache when it changes so everything re-fetches with the
+    // new selection baked in.
+    DatasetOverlayMode overlayMode = DatasetOverlayMode::Annotations;
 
     std::string exportDestinationFolder;
     bool exportFolderPickerOpen = false;

@@ -68,10 +68,12 @@ void syncDatasetBrowserAutoFetch(DatasetBrowserState& state, const LabelStudioSe
     state.dataImageKey = config.dataImageKey;
 
     state.rectangleLabelsFromName.clear();
+    state.brushLabelsFromName.clear();
     for (const auto& tag : config.controlTags) {
-        if (tag.type == LabelStudioControlTagType::RectangleLabels) {
+        if (tag.type == LabelStudioControlTagType::RectangleLabels && state.rectangleLabelsFromName.empty()) {
             state.rectangleLabelsFromName = tag.name;
-            break;
+        } else if (tag.type == LabelStudioControlTagType::BrushLabels && state.brushLabelsFromName.empty()) {
+            state.brushLabelsFromName = tag.name;
         }
     }
     state.thumbnailCache.clear();

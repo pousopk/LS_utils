@@ -57,15 +57,15 @@ void drawFilterControls(DatasetBrowserState& state) {
     // the image at decode time (see DatasetThumbnailWorker), so
     // switching this clears already-cached thumbnails and lets them
     // re-fetch with the new selection baked in.
-    const DatasetBoxOverlayMode previousMode = state.boxOverlayMode;
-    if (ImGui::RadioButton("Annotations", state.boxOverlayMode == DatasetBoxOverlayMode::Annotations)) {
-        state.boxOverlayMode = DatasetBoxOverlayMode::Annotations;
+    const DatasetOverlayMode previousMode = state.overlayMode;
+    if (ImGui::RadioButton("Annotations", state.overlayMode == DatasetOverlayMode::Annotations)) {
+        state.overlayMode = DatasetOverlayMode::Annotations;
     }
     ImGui::SameLine();
-    if (ImGui::RadioButton("Predictions", state.boxOverlayMode == DatasetBoxOverlayMode::Predictions)) {
-        state.boxOverlayMode = DatasetBoxOverlayMode::Predictions;
+    if (ImGui::RadioButton("Predictions", state.overlayMode == DatasetOverlayMode::Predictions)) {
+        state.overlayMode = DatasetOverlayMode::Predictions;
     }
-    if (state.boxOverlayMode != previousMode) {
+    if (state.overlayMode != previousMode) {
         state.thumbnailCache.clear();
     }
 }
@@ -135,10 +135,12 @@ void drawGrid(DatasetBrowserState& state) {
                 [taskId](const DatasetTaskSummary& s) { return s.taskId == taskId; });
             if (summaryIt != state.summaries.end()) {
                 const auto boxes = boxesToDrawForTask(state.rawTasksJson, state.rectangleLabelsFromName, taskId);
-                const auto& boxesToDraw = state.boxOverlayMode == DatasetBoxOverlayMode::Annotations
-                    ? boxes.annotationBoxes
-                    : boxes.predictionBoxes;
-                state.thumbnailWorker.requestThumbnail(DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxesToDraw});
+                const auto masks = masksToDrawForTask(state.rawTasksJson, state.brushLabelsFromName, taskId);
+                const bool showAnnotations = state.overlayMode == DatasetOverlayMode::Annotations;
+                const auto& boxesToDraw = showAnnotations ? boxes.annotationBoxes : boxes.predictionBoxes;
+                const auto& masksToDraw = showAnnotations ? masks.annotationMasks : masks.predictionMasks;
+                state.thumbnailWorker.requestThumbnail(
+                    DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxesToDraw, masksToDraw});
             }
         }
     }

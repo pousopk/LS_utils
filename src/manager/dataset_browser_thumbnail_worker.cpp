@@ -2,6 +2,7 @@
 
 #include "manager/label_color.hpp"
 #include "manager/label_studio_client.hpp"
+#include "manager/mask_overlay.hpp"
 #include "manager/rotated_box_geometry.hpp"
 
 #include <opencv2/imgcodecs.hpp>
@@ -55,6 +56,33 @@ void drawBoxesOnThumbnail(cv::Mat& image, const std::vector<DraftDetectionBox>& 
             cv::putText(image, box.className, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv::LINE_AA);
         }
     }
+}
+
+// Resizes each mask (originally at the source image's own resolution,
+// not necessarily `image`'s) to `image`'s exact size -- cv::INTER_NEAREST
+// rather than an interpolating filter, since a mask is categorical
+// (in/out), not photographic, and nearest-neighbor avoids inventing
+// gray edge pixels a smoother filter would -- then composites via
+// compositeMaskOverlay (the same function the Labeling window's mask
+// editor preview uses). Resizing straight to `image.size()` rather than
+// scaling by a factor guarantees an exact size match regardless of any
+// rounding in how `image` itself was resized, which compositeMaskOverlay
+// requires (it silently skips a region whose mask size doesn't match).
+cv::Mat compositeMasksOnThumbnail(const cv::Mat& image, const std::vector<DraftBrushRegion>& masks) {
+    if (masks.empty()) {
+        return image;
+    }
+    std::vector<DraftBrushRegion> resizedMasks;
+    resizedMasks.reserve(masks.size());
+    for (const auto& region : masks) {
+        if (region.mask.empty()) {
+            continue;
+        }
+        DraftBrushRegion resized = region;
+        cv::resize(region.mask, resized.mask, image.size(), 0, 0, cv::INTER_NEAREST);
+        resizedMasks.push_back(std::move(resized));
+    }
+    return compositeMaskOverlay(image, resizedMasks);
 }
 
 } // namespace
@@ -152,8 +180,9 @@ void DatasetThumbnailWorker::run() {
                 } else {
                     resized = decoded;
                 }
-                drawBoxesOnThumbnail(resized, request.boxesToDraw, effectiveScale);
-                result.thumbnail = resized;
+                cv::Mat withMasks = compositeMasksOnThumbnail(resized, request.masksToDraw);
+                drawBoxesOnThumbnail(withMasks, request.boxesToDraw, effectiveScale);
+                result.thumbnail = withMasks;
                 result.success = true;
             }
         }

@@ -75,7 +75,7 @@ nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const s
 
 // Kept separate (rather than one merged list) so callers can pick just
 // one -- the Dataset Browser only ever bakes annotations *or*
-// predictions into a thumbnail at a time (DatasetBoxOverlayMode), never
+// predictions into a thumbnail at a time (DatasetOverlayMode), never
 // both, since it colors boxes by class name rather than by source and
 // mixing both lists together would make that ambiguous to read.
 struct DatasetBoxesToDraw {
