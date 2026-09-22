@@ -147,3 +147,27 @@ std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summa
 
     return matching;
 }
+
+nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds) {
+    nlohmann::json out = nlohmann::json::array();
+
+    const nlohmann::json* tasks = &allTasksRaw;
+    if (allTasksRaw.is_object() && allTasksRaw.contains("tasks") && allTasksRaw["tasks"].is_array()) {
+        tasks = &allTasksRaw["tasks"];
+    }
+    if (!tasks->is_array()) {
+        return out;
+    }
+
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        const int taskId = task["id"].get<int>();
+        if (std::find(matchingTaskIds.begin(), matchingTaskIds.end(), taskId) != matchingTaskIds.end()) {
+            out.push_back(task);
+        }
+    }
+
+    return out;
+}

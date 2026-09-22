@@ -59,3 +59,14 @@ struct DatasetFilterSpec {
 // at all never passes an active confidence filter, regardless of
 // threshold.
 std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summaries, const DatasetFilterSpec& filter);
+
+// Pure function: returns the subset of `allTasksRaw` (the same raw
+// tasks-list JSON fetchAllLabelStudioTasksRaw produces) whose task ids
+// are in `matchingTaskIds`, as a bare JSON array of unmodified task
+// objects, in `allTasksRaw`'s original order. This is the Dataset
+// Browser's entire export file: since parseLabelStudioExport/
+// loadLabelStudioExport already treat this exact shape as a Label
+// Studio export, no new serialization format is needed. Tasks in
+// `matchingTaskIds` not found in `allTasksRaw` are silently skipped
+// (defensive; shouldn't happen since both come from the same fetch).
+nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds);
