@@ -105,3 +105,45 @@ std::vector<DatasetTaskSummary> summarizeDatasetTasks(
 
     return summaries;
 }
+
+std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summaries, const DatasetFilterSpec& filter) {
+    std::vector<int> matching;
+
+    for (const auto& summary : summaries) {
+        if (filter.annotationFilter == DatasetPresenceFilter::Has && !summary.hasAnnotation) {
+            continue;
+        }
+        if (filter.annotationFilter == DatasetPresenceFilter::Lacks && summary.hasAnnotation) {
+            continue;
+        }
+        if (filter.predictionFilter == DatasetPresenceFilter::Has && !summary.hasPrediction) {
+            continue;
+        }
+        if (filter.predictionFilter == DatasetPresenceFilter::Lacks && summary.hasPrediction) {
+            continue;
+        }
+
+        if (!filter.classNameFilter.empty()) {
+            const bool hasClass =
+                std::find(summary.classNames.begin(), summary.classNames.end(), filter.classNameFilter)
+                != summary.classNames.end();
+            if (!hasClass) {
+                continue;
+            }
+        }
+
+        if (filter.confidenceFilterMode == DatasetConfidenceFilterMode::LessThan) {
+            if (!summary.minConfidence || !(*summary.minConfidence < filter.confidenceThreshold)) {
+                continue;
+            }
+        } else if (filter.confidenceFilterMode == DatasetConfidenceFilterMode::GreaterThan) {
+            if (!summary.maxConfidence || !(*summary.maxConfidence > filter.confidenceThreshold)) {
+                continue;
+            }
+        }
+
+        matching.push_back(summary.taskId);
+    }
+
+    return matching;
+}

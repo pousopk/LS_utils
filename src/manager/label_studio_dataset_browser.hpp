@@ -36,3 +36,26 @@ struct DatasetTaskSummary {
 // selectUnlabeledTasks's existing convention.
 std::vector<DatasetTaskSummary> summarizeDatasetTasks(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
+
+enum class DatasetPresenceFilter { Any, Has, Lacks };
+
+enum class DatasetConfidenceFilterMode { None, LessThan, GreaterThan };
+
+struct DatasetFilterSpec {
+    DatasetPresenceFilter annotationFilter = DatasetPresenceFilter::Any;
+    DatasetPresenceFilter predictionFilter = DatasetPresenceFilter::Any;
+    std::string classNameFilter;   // empty = no class-name filtering; otherwise an exact match against any of classNames
+    DatasetConfidenceFilterMode confidenceFilterMode = DatasetConfidenceFilterMode::None;
+    float confidenceThreshold = 0.5f;   // compared against maxConfidence (GreaterThan) or minConfidence (LessThan)
+};
+
+// Pure function: returns the taskId of every summary matching every
+// active filter dimension in `filter` (dimensions left at their default
+// -- Any / empty / None -- are ignored). LessThan/GreaterThan each need
+// at least one prediction with a numeric score to evaluate: LessThan
+// passes if the summary's *lowest* confidence is below the threshold
+// (i.e. at least one prediction is that low); GreaterThan passes if its
+// *highest* confidence is above it. A summary with no scored prediction
+// at all never passes an active confidence filter, regardless of
+// threshold.
+std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summaries, const DatasetFilterSpec& filter);

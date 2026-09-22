@@ -114,6 +114,99 @@ void test_summarizeDatasetTasks_wrappedInTasksKey() {
     CHECK(summarizeDatasetTasks(json, "image").size() == 1);
 }
 
+void test_filterDatasetTasks_annotationHasExcludesTasksWithoutAnnotation() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", true, false, {}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
+    };
+    DatasetFilterSpec filter;
+    filter.annotationFilter = DatasetPresenceFilter::Has;
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 1);
+}
+
+void test_filterDatasetTasks_predictionLacksExcludesTasksWithPrediction() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", false, true, {}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
+    };
+    DatasetFilterSpec filter;
+    filter.predictionFilter = DatasetPresenceFilter::Lacks;
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 2);
+}
+
+void test_filterDatasetTasks_classNameFilterRequiresExactMatch() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", true, false, {"Cat", "Dog"}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{2, "/b.jpg", true, false, {"Dog"}, std::nullopt, std::nullopt},
+    };
+    DatasetFilterSpec filter;
+    filter.classNameFilter = "Cat";
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 1);
+}
+
+void test_filterDatasetTasks_confidenceLessThanUsesMinConfidence() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", false, true, {}, 0.2f, 0.8f},
+        DatasetTaskSummary{2, "/b.jpg", false, true, {}, 0.6f, 0.9f},
+    };
+    DatasetFilterSpec filter;
+    filter.confidenceFilterMode = DatasetConfidenceFilterMode::LessThan;
+    filter.confidenceThreshold = 0.5f;
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 1);
+}
+
+void test_filterDatasetTasks_confidenceGreaterThanUsesMaxConfidence() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", false, true, {}, 0.1f, 0.4f},
+        DatasetTaskSummary{2, "/b.jpg", false, true, {}, 0.6f, 0.9f},
+    };
+    DatasetFilterSpec filter;
+    filter.confidenceFilterMode = DatasetConfidenceFilterMode::GreaterThan;
+    filter.confidenceThreshold = 0.5f;
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 2);
+}
+
+void test_filterDatasetTasks_confidenceFilterExcludesTasksWithNoPrediction() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", false, false, {}, std::nullopt, std::nullopt},
+    };
+    DatasetFilterSpec filter;
+    filter.confidenceFilterMode = DatasetConfidenceFilterMode::GreaterThan;
+    filter.confidenceThreshold = 0.0f;
+    CHECK(filterDatasetTasks(summaries, filter).empty());
+}
+
+void test_filterDatasetTasks_combinesMultipleDimensions() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", true, true, {"Cat"}, 0.7f, 0.9f},
+        DatasetTaskSummary{2, "/b.jpg", true, true, {"Dog"}, 0.7f, 0.9f},
+    };
+    DatasetFilterSpec filter;
+    filter.annotationFilter = DatasetPresenceFilter::Has;
+    filter.classNameFilter = "Cat";
+    const auto matching = filterDatasetTasks(summaries, filter);
+    CHECK(matching.size() == 1);
+    CHECK(matching[0] == 1);
+}
+
+void test_filterDatasetTasks_allDefaultsMatchesEverything() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{1, "/a.jpg", true, true, {}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
+    };
+    CHECK(filterDatasetTasks(summaries, DatasetFilterSpec{}).size() == 2);
+}
+
 } // namespace
 
 int main() {
@@ -126,6 +219,14 @@ int main() {
     test_summarizeDatasetTasks_noConfidenceWhenNoPredictionsHaveScore();
     test_summarizeDatasetTasks_skipsTaskMissingIdOrImageKey();
     test_summarizeDatasetTasks_wrappedInTasksKey();
+    test_filterDatasetTasks_annotationHasExcludesTasksWithoutAnnotation();
+    test_filterDatasetTasks_predictionLacksExcludesTasksWithPrediction();
+    test_filterDatasetTasks_classNameFilterRequiresExactMatch();
+    test_filterDatasetTasks_confidenceLessThanUsesMinConfidence();
+    test_filterDatasetTasks_confidenceGreaterThanUsesMaxConfidence();
+    test_filterDatasetTasks_confidenceFilterExcludesTasksWithNoPrediction();
+    test_filterDatasetTasks_combinesMultipleDimensions();
+    test_filterDatasetTasks_allDefaultsMatchesEverything();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
