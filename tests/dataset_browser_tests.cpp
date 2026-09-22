@@ -379,6 +379,69 @@ void test_masksToDrawForTask_taskNotFoundReturnsEmpty() {
     CHECK(masks.predictionMasks.empty());
 }
 
+void test_buildBoxesByTaskId_matchesPerTaskLookupForEveryTask() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"},
+         "annotations": [{"result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0, "rectanglelabels": ["Cat"]}}
+         ]}]},
+        {"id": 2, "data": {"image": "/b.jpg"},
+         "predictions": [{"score": 0.5, "result": [
+             {"type": "rectanglelabels", "from_name": "label", "original_width": 100, "original_height": 100,
+              "value": {"x": 5.0, "y": 5.0, "width": 15.0, "height": 15.0, "rectanglelabels": ["Dog"]}}
+         ]}]}
+    ])");
+    const auto byId = buildBoxesByTaskId(json, "label");
+    CHECK(byId.size() == 2);
+    CHECK(byId.at(1).annotationBoxes.size() == 1);
+    CHECK(byId.at(1).annotationBoxes[0].className == "Cat");
+    CHECK(byId.at(2).predictionBoxes.size() == 1);
+    CHECK(byId.at(2).predictionBoxes[0].className == "Dog");
+}
+
+void test_buildBoxesByTaskId_emptyFromNameReturnsEmptyMap() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1, "data": {"image": "/a.jpg"}}])");
+    CHECK(buildBoxesByTaskId(json, "").empty());
+}
+
+void test_buildMasksByTaskId_matchesPerTaskLookupForEveryTask() {
+    const cv::Mat mask(2, 2, CV_8UC1, cv::Scalar(255));
+    const std::vector<int> rle = encodeMaskToLabelStudioRle(mask);
+
+    nlohmann::json taskOne;
+    taskOne["id"] = 1;
+    taskOne["data"]["image"] = "/a.jpg";
+    taskOne["annotations"] = nlohmann::json::array(
+        {nlohmann::json{{"result", nlohmann::json::array({brushResultItem(rle, "mask", "Cat")})}}});
+
+    const auto json = nlohmann::json::array({taskOne});
+    const auto byId = buildMasksByTaskId(json, "mask");
+    CHECK(byId.size() == 1);
+    CHECK(byId.at(1).annotationMasks.size() == 1);
+    CHECK(byId.at(1).annotationMasks[0].className == "Cat");
+}
+
+void test_buildMasksByTaskId_emptyFromNameReturnsEmptyMap() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1, "data": {"image": "/a.jpg"}}])");
+    CHECK(buildMasksByTaskId(json, "").empty());
+}
+
+void test_indexSummariesByTaskId_mapsEachTaskIdToItsIndex() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        DatasetTaskSummary{5, "/a.jpg", true, false, {}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{9, "/b.jpg", false, true, {}, std::nullopt, std::nullopt},
+    };
+    const auto index = indexSummariesByTaskId(summaries);
+    CHECK(index.size() == 2);
+    CHECK(summaries[index.at(5)].taskId == 5);
+    CHECK(summaries[index.at(9)].taskId == 9);
+}
+
+void test_indexSummariesByTaskId_emptyInputReturnsEmptyMap() {
+    CHECK(indexSummariesByTaskId({}).empty());
+}
+
 } // namespace
 
 int main() {
@@ -415,6 +478,12 @@ int main() {
     test_masksToDrawForTask_separatesAnnotationAndPredictionMasks();
     test_masksToDrawForTask_emptyFromNameReturnsNothing();
     test_masksToDrawForTask_taskNotFoundReturnsEmpty();
+    test_buildBoxesByTaskId_matchesPerTaskLookupForEveryTask();
+    test_buildBoxesByTaskId_emptyFromNameReturnsEmptyMap();
+    test_buildMasksByTaskId_matchesPerTaskLookupForEveryTask();
+    test_buildMasksByTaskId_emptyFromNameReturnsEmptyMap();
+    test_indexSummariesByTaskId_mapsEachTaskIdToItsIndex();
+    test_indexSummariesByTaskId_emptyInputReturnsEmptyMap();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

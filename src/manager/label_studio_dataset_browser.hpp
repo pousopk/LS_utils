@@ -4,8 +4,10 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // One task's browsing-relevant summary, extracted from a Label Studio
@@ -115,3 +117,29 @@ struct DatasetMasksToDraw {
 // tag) or the task isn't found.
 DatasetMasksToDraw masksToDrawForTask(
     const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName, int taskId);
+
+// Pure function: one pass over `allTasksRaw`, building a taskId ->
+// DatasetBoxesToDraw map for every task -- same extraction as
+// boxesToDrawForTask, but for every task at once instead of searching
+// for one task per call. Exists so repeated per-task lookups (e.g. once
+// per newly-visible grid cell while scrolling) are O(1) map lookups
+// against a result built once, rather than each independently
+// re-scanning the whole task list (which made scrolling visibly slow
+// once a project had more than a couple hundred tasks). Returns an
+// empty map immediately if `rectangleLabelsFromName` is empty, matching
+// boxesToDrawForTask's "nothing to draw" convention.
+std::unordered_map<int, DatasetBoxesToDraw> buildBoxesByTaskId(
+    const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName);
+
+// Same one-pass-instead-of-per-lookup idea as buildBoxesByTaskId, for masksToDrawForTask.
+std::unordered_map<int, DatasetMasksToDraw> buildMasksByTaskId(
+    const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName);
+
+// Pure function: builds a taskId -> index-into-`summaries` lookup, so
+// repeated per-task summary lookups don't need a linear scan over the
+// whole list (the same "std::find_if over the whole vector per grid
+// cell" problem buildBoxesByTaskId/buildMasksByTaskId address, just for
+// DatasetTaskSummary instead of raw JSON). The returned indices are only
+// valid against the exact `summaries` vector passed in -- rebuild this
+// alongside any reassignment of that vector, not just once.
+std::unordered_map<int, size_t> indexSummariesByTaskId(const std::vector<DatasetTaskSummary>& summaries);
