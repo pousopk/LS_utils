@@ -73,15 +73,24 @@ std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summa
 // (defensive; shouldn't happen since both come from the same fetch).
 nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds);
 
+// Kept separate (rather than one merged list) so callers can draw
+// annotations and predictions in different colors -- otherwise there's
+// no way to tell ground truth from a model's guess just by looking at
+// the image.
+struct DatasetBoxesToDraw {
+    std::vector<DraftDetectionBox> annotationBoxes;
+    std::vector<DraftDetectionBox> predictionBoxes;
+};
+
 // Pure function: finds `taskId` in `allTasksRaw` (the same raw shape
-// fetchAllLabelStudioTasksRaw produces) and returns every box from its
-// annotations *and* predictions, via parseDetectionResultBoxes with
+// fetchAllLabelStudioTasksRaw produces) and returns its annotation boxes
+// and prediction boxes separately, via parseDetectionResultBoxes with
 // `rectangleLabelsFromName` -- the same result-parsing this app's own
 // Labeling/Label Assistant windows already use, so this stays correct
 // for rotated boxes (parseDetectionResultBoxes handles the `rotation`
 // field the same way regardless of caller) without duplicating that
-// logic. Returns empty if `rectangleLabelsFromName` is empty (the
+// logic. Both lists are empty if `rectangleLabelsFromName` is empty (the
 // project has no RectangleLabels control tag -- e.g. classification-only
 // -- so there's nothing box-shaped to draw) or the task isn't found.
-std::vector<DraftDetectionBox> boxesToDrawForTask(
+DatasetBoxesToDraw boxesToDrawForTask(
     const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName, int taskId);
