@@ -2,6 +2,7 @@
 
 #include "manager/labeling_state.hpp"
 #include "widgets/AppUi.hpp"
+#include "widgets/dataset_browser_window.hpp"
 #include "widgets/label_assistant_window.hpp"
 #include "widgets/labeling_window.hpp"
 #include "widgets/timestamp_search_window.hpp"
@@ -133,6 +134,15 @@ void drawLabelStudioWindow(AppUi& ui) {
         }
         if (ImGui::BeginTabItem("Find by Timestamp", nullptr, timestampSearchFlags)) {
             drawTimestampSearchTabContent(ui.timestampSearchState, ui.labelStudioSession, onLabelTask, onOpenConnectionTab);
+            ImGui::EndTabItem();
+        }
+
+        ImGuiTabItemFlags datasetBrowserFlags = ImGuiTabItemFlags_None;
+        if (ui.pendingLabelStudioTab == LabelStudioTab::DatasetBrowser) {
+            datasetBrowserFlags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Dataset Browser", nullptr, datasetBrowserFlags)) {
+            drawDatasetBrowserTabContent(ui.datasetBrowserState, ui.labelStudioSession, onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 
