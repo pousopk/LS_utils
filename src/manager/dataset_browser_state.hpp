@@ -59,6 +59,19 @@ struct DatasetBrowserState {
     std::string taskListError;
     bool taskListLoaded = false;
 
+    // taskId -> O(1) lookups, rebuilt (via indexSummariesByTaskId/
+    // buildBoxesByTaskId/buildMasksByTaskId) every time summaries/
+    // rawTasksJson are, in refreshDatasetBrowserTaskList. Exist so the
+    // grid doesn't re-scan the whole task list for every newly-visible
+    // cell while scrolling -- it used to, via std::find_if over
+    // summaries plus boxesToDrawForTask/masksToDrawForTask each
+    // independently re-scanning rawTasksJson, and that's what made
+    // scrolling visibly slow on any project with more than a couple
+    // hundred tasks.
+    std::unordered_map<int, size_t> summaryIndexByTaskId;
+    std::unordered_map<int, DatasetBoxesToDraw> boxesByTaskId;
+    std::unordered_map<int, DatasetMasksToDraw> masksByTaskId;
+
     DatasetFilterSpec filter;
     std::vector<int> matchingTaskIds;   // recomputed whenever summaries or filter changes
 

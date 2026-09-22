@@ -127,20 +127,24 @@ void drawGrid(DatasetBrowserState& state) {
     }
     clipper.End();
 
+    static const DatasetBoxesToDraw kEmptyBoxes;
+    static const DatasetMasksToDraw kEmptyMasks;
+
     for (const int taskId : visibleAndLookaheadIds) {
         state.thumbnailCache.touch(taskId);
         if (state.thumbnailCache.entries.find(taskId) == state.thumbnailCache.entries.end()) {
-            const auto summaryIt = std::find_if(
-                state.summaries.begin(), state.summaries.end(),
-                [taskId](const DatasetTaskSummary& s) { return s.taskId == taskId; });
-            if (summaryIt != state.summaries.end()) {
-                const auto boxes = boxesToDrawForTask(state.rawTasksJson, state.rectangleLabelsFromName, taskId);
-                const auto masks = masksToDrawForTask(state.rawTasksJson, state.brushLabelsFromName, taskId);
+            const auto summaryIndexIt = state.summaryIndexByTaskId.find(taskId);
+            if (summaryIndexIt != state.summaryIndexByTaskId.end()) {
+                const auto boxesIt = state.boxesByTaskId.find(taskId);
+                const auto masksIt = state.masksByTaskId.find(taskId);
+                const DatasetBoxesToDraw& boxes = boxesIt != state.boxesByTaskId.end() ? boxesIt->second : kEmptyBoxes;
+                const DatasetMasksToDraw& masks = masksIt != state.masksByTaskId.end() ? masksIt->second : kEmptyMasks;
                 const bool showAnnotations = state.overlayMode == DatasetOverlayMode::Annotations;
                 const auto& boxesToDraw = showAnnotations ? boxes.annotationBoxes : boxes.predictionBoxes;
                 const auto& masksToDraw = showAnnotations ? masks.annotationMasks : masks.predictionMasks;
+                const std::string& imagePath = state.summaries[summaryIndexIt->second].imagePath;
                 state.thumbnailWorker.requestThumbnail(
-                    DatasetThumbnailRequest{taskId, summaryIt->imagePath, boxesToDraw, masksToDraw});
+                    DatasetThumbnailRequest{taskId, imagePath, boxesToDraw, masksToDraw});
             }
         }
     }
@@ -159,24 +163,23 @@ void drawSelectedTaskDetail(DatasetBrowserState& state) {
     }
 
     const int selectedId = *state.selectedTaskId;
-    const auto summaryIt = std::find_if(
-        state.summaries.begin(), state.summaries.end(),
-        [selectedId](const DatasetTaskSummary& s) { return s.taskId == selectedId; });
-    if (summaryIt == state.summaries.end()) {
+    const auto summaryIndexIt = state.summaryIndexByTaskId.find(selectedId);
+    if (summaryIndexIt == state.summaryIndexByTaskId.end()) {
         ImGui::TextDisabled("Task no longer in the current list.");
         ImGui::EndChild();
         return;
     }
+    const DatasetTaskSummary& summary = state.summaries[summaryIndexIt->second];
 
-    ImGui::Text("Task #%d", summaryIt->taskId);
-    ImGui::Text("Annotation: %s", summaryIt->hasAnnotation ? "yes" : "no");
-    ImGui::Text("Prediction: %s", summaryIt->hasPrediction ? "yes" : "no");
-    if (summaryIt->minConfidence && summaryIt->maxConfidence) {
-        ImGui::Text("Confidence: %.2f - %.2f", *summaryIt->minConfidence, *summaryIt->maxConfidence);
+    ImGui::Text("Task #%d", summary.taskId);
+    ImGui::Text("Annotation: %s", summary.hasAnnotation ? "yes" : "no");
+    ImGui::Text("Prediction: %s", summary.hasPrediction ? "yes" : "no");
+    if (summary.minConfidence && summary.maxConfidence) {
+        ImGui::Text("Confidence: %.2f - %.2f", *summary.minConfidence, *summary.maxConfidence);
     }
-    if (!summaryIt->classNames.empty()) {
+    if (!summary.classNames.empty()) {
         std::string classNamesText;
-        for (const auto& className : summaryIt->classNames) {
+        for (const auto& className : summary.classNames) {
             if (!classNamesText.empty()) {
                 classNamesText += ", ";
             }
