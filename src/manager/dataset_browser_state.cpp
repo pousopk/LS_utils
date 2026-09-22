@@ -98,6 +98,9 @@ void refreshDatasetBrowserTaskList(DatasetBrowserState& state, const LabelStudio
     state.taskListError.clear();
     state.rawTasksJson = std::move(allTasks);
     state.summaries = summarizeDatasetTasks(state.rawTasksJson, state.dataImageKey);
+    state.summaryIndexByTaskId = indexSummariesByTaskId(state.summaries);
+    state.boxesByTaskId = buildBoxesByTaskId(state.rawTasksJson, state.rectangleLabelsFromName);
+    state.masksByTaskId = buildMasksByTaskId(state.rawTasksJson, state.brushLabelsFromName);
     state.taskListLoaded = true;
     state.thumbnailCache.clear();
     reapplyDatasetBrowserFilter(state);
