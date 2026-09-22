@@ -382,6 +382,20 @@ struct LabelStudioTaskSummary {
 std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
 
+// Fetches every task in the project (with predictions embedded, via Label
+// Studio's `fields=all` query param), paging via
+// shouldFetchNextLabelStudioPage until it says to stop. Handles a
+// bare-array response, or an object with a "tasks" or "results" array --
+// Label Studio's exact response shape isn't pinned to one version.
+// Capped at 1000 pages as a safety valve against an unexpected server
+// response looping forever. This is the raw fetch every higher-level
+// flow in this file (task summaries, downloads, prediction push/attach,
+// timestamp search, ground truth, the Dataset Browser) is built on top
+// of.
+bool fetchAllLabelStudioTasksRaw(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
+    std::string& error);
+
 struct LabelStudioTaskListResult {
     std::vector<LabelStudioTaskSummary> tasks;
     std::string error;   // set only on a hard failure to fetch the task list

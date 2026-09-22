@@ -644,67 +644,6 @@ namespace {
 // replace its own prior predictions without touching anyone else's.
 constexpr const char* kModelVersion = "vision_app_label_assistant";
 
-// Fetches every task in the project (with predictions embedded, via Label
-// Studio's `fields=all` query param), paging via
-// shouldFetchNextLabelStudioPage until it says to stop. Handles a
-// bare-array response, or an object with a "tasks" or "results" array --
-// Label Studio's exact response shape here isn't pinned to one version.
-// Capped at 1000 pages as a safety valve against an unexpected server
-// response looping forever.
-bool fetchAllLabelStudioTasksRaw(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
-    std::string& error) {
-    allTasks = nlohmann::json::array();
-    const int pageSize = 200;
-
-    for (int page = 1; page <= 1000; ++page) {
-        const std::string url = normalizeBaseUrl(baseUrl) + "/api/tasks/?project=" + std::to_string(projectId)
-            + "&fields=all&page=" + std::to_string(page) + "&page_size=" + std::to_string(pageSize);
-
-        std::string responseBody;
-        long httpCode = 0;
-        std::string networkError;
-        if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
-            error = networkError;
-            return false;
-        }
-        if (httpCode < 200 || httpCode >= 300) {
-            error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
-            return false;
-        }
-
-        nlohmann::json parsed;
-        try {
-            parsed = nlohmann::json::parse(responseBody);
-        } catch (const nlohmann::json::parse_error&) {
-            error = "Failed to parse task list response";
-            return false;
-        }
-
-        const nlohmann::json* pageTasks = &parsed;
-        if (parsed.is_object()) {
-            if (parsed.contains("tasks") && parsed["tasks"].is_array()) {
-                pageTasks = &parsed["tasks"];
-            } else if (parsed.contains("results") && parsed["results"].is_array()) {
-                pageTasks = &parsed["results"];
-            }
-        }
-        if (!pageTasks->is_array()) {
-            break;
-        }
-
-        for (const auto& task : *pageTasks) {
-            allTasks.push_back(task);
-        }
-
-        if (!shouldFetchNextLabelStudioPage(parsed, pageTasks->size(), pageSize)) {
-            break;
-        }
-    }
-
-    return true;
-}
-
 // Uploads `imagePath`'s bytes as a real multipart file upload to the
 // project's import endpoint, creating a brand-new task. Returns true only
 // on a 2xx response; the caller resolves the resulting task id
@@ -802,6 +741,69 @@ bool createLabelStudioPredictionInternal(
 }
 
 } // namespace
+
+// Fetches every task in the project (with predictions embedded, via Label
+// Studio's `fields=all` query param), paging via
+// shouldFetchNextLabelStudioPage until it says to stop. Handles a
+// bare-array response, or an object with a "tasks" or "results" array --
+// Label Studio's exact response shape here isn't pinned to one version.
+// Capped at 1000 pages as a safety valve against an unexpected server
+// response looping forever. Exposed (not file-local) since the Dataset
+// Browser needs the raw task list directly, not just one of the
+// higher-level summaries/downloads built on top of it below.
+bool fetchAllLabelStudioTasksRaw(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
+    std::string& error) {
+    allTasks = nlohmann::json::array();
+    const int pageSize = 200;
+
+    for (int page = 1; page <= 1000; ++page) {
+        const std::string url = normalizeBaseUrl(baseUrl) + "/api/tasks/?project=" + std::to_string(projectId)
+            + "&fields=all&page=" + std::to_string(page) + "&page_size=" + std::to_string(pageSize);
+
+        std::string responseBody;
+        long httpCode = 0;
+        std::string networkError;
+        if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
+            error = networkError;
+            return false;
+        }
+        if (httpCode < 200 || httpCode >= 300) {
+            error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
+            return false;
+        }
+
+        nlohmann::json parsed;
+        try {
+            parsed = nlohmann::json::parse(responseBody);
+        } catch (const nlohmann::json::parse_error&) {
+            error = "Failed to parse task list response";
+            return false;
+        }
+
+        const nlohmann::json* pageTasks = &parsed;
+        if (parsed.is_object()) {
+            if (parsed.contains("tasks") && parsed["tasks"].is_array()) {
+                pageTasks = &parsed["tasks"];
+            } else if (parsed.contains("results") && parsed["results"].is_array()) {
+                pageTasks = &parsed["results"];
+            }
+        }
+        if (!pageTasks->is_array()) {
+            break;
+        }
+
+        for (const auto& task : *pageTasks) {
+            allTasks.push_back(task);
+        }
+
+        if (!shouldFetchNextLabelStudioPage(parsed, pageTasks->size(), pageSize)) {
+            break;
+        }
+    }
+
+    return true;
+}
 
 LabelStudioTaskListResult fetchLabelStudioTaskSummaries(
     const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey) {
