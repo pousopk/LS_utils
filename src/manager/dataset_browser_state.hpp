@@ -1,6 +1,7 @@
 #pragma once
 
 #include "manager/dataset_browser_export_worker.hpp"
+#include "manager/dataset_browser_tasklist_worker.hpp"
 #include "manager/dataset_browser_thumbnail_worker.hpp"
 #include "manager/dataset_thumbnail_lru.hpp"
 #include "manager/label_studio_dataset_browser.hpp"
@@ -58,6 +59,8 @@ struct DatasetBrowserState {
     nlohmann::json rawTasksJson;
     std::string taskListError;
     bool taskListLoaded = false;
+    DatasetTaskListWorker taskListWorker;
+    bool taskListLoading = false;
 
     // taskId -> O(1) lookups, rebuilt (via indexSummariesByTaskId/
     // buildBoxesByTaskId/buildMasksByTaskId) every time summaries/
@@ -114,14 +117,13 @@ struct DatasetBrowserState {
     std::string exportStatus;
 };
 
-// Fetches the project's full task list (fetchAllLabelStudioTasksRaw) and
-// re-derives summaries/matchingTaskIds from it. Call on window open and
-// on an explicit "Refresh" click. Synchronous (a single blocking network
-// call), matching this codebase's existing convention for connection/
-// config-shaped fetches -- unlike downloading images, this is one JSON
-// response, not a per-item loop, so it doesn't need a worker thread.
-// No-op (sets taskListError) if dataImageKey hasn't been auto-fetched
-// yet.
+// Starts state.taskListWorker to fetch the project's full task list and
+// (on the worker thread) re-derive summaries/the O(1) lookup maps from
+// it, returning immediately -- does not block. Call on window open and
+// on an explicit "Refresh" click. Sets state.taskListLoading = true;
+// updateDatasetBrowserState applies the result once the worker
+// finishes. No-op (sets taskListError immediately, no worker started)
+// if dataImageKey hasn't been auto-fetched yet.
 void refreshDatasetBrowserTaskList(DatasetBrowserState& state, const LabelStudioSessionState& session);
 
 // Re-runs filterDatasetTasks against the current summaries/filter and
@@ -137,7 +139,9 @@ void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSess
 
 // Called once per frame while the Dataset Browser tab is open:
 // auto-fetches dataImageKey (clearing the thumbnail cache and updating
-// the thumbnail worker's connection if the project changed), drains
-// thumbnailWorker's decoded results and uploads them as textures into
-// thumbnailCache, and polls exportWorker's progress/result.
+// the thumbnail worker's connection if the project changed), polls
+// taskListWorker and applies a finished result (rawTasksJson/summaries/
+// the O(1) lookup maps, then reapplyDatasetBrowserFilter) or records its
+// error, drains thumbnailWorker's decoded results and uploads them as
+// textures into thumbnailCache, and polls exportWorker's progress/result.
 void updateDatasetBrowserState(DatasetBrowserState& state, const LabelStudioSessionState& session);
