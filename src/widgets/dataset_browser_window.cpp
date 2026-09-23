@@ -266,11 +266,16 @@ void drawDatasetBrowserTabContent(
     drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
 
     const bool canBrowse = session.status == LabelStudioSessionStatus::Connected && session.activeProjectId > 0;
-    ImGui::BeginDisabled(!canBrowse);
+    ImGui::BeginDisabled(!canBrowse || state.taskListLoading);
     if (ImGui::Button("Refresh")) {
         refreshDatasetBrowserTaskList(state, session);
     }
     ImGui::EndDisabled();
+
+    if (state.taskListLoading) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Loading tasks...");
+    }
 
     if (!state.taskListError.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.taskListError.c_str());

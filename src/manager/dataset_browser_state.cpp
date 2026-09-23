@@ -88,22 +88,17 @@ void refreshDatasetBrowserTaskList(DatasetBrowserState& state, const LabelStudio
         return;
     }
 
-    nlohmann::json allTasks;
-    std::string error;
-    if (!fetchAllLabelStudioTasksRaw(session.baseUrl, session.activeProjectId, session.apiToken, allTasks, error)) {
-        state.taskListError = error;
-        return;
-    }
+    DatasetTaskListConfig config;
+    config.baseUrl = session.baseUrl;
+    config.projectId = session.activeProjectId;
+    config.apiToken = session.apiToken;
+    config.dataImageKey = state.dataImageKey;
+    config.rectangleLabelsFromName = state.rectangleLabelsFromName;
+    config.brushLabelsFromName = state.brushLabelsFromName;
 
     state.taskListError.clear();
-    state.rawTasksJson = std::move(allTasks);
-    state.summaries = summarizeDatasetTasks(state.rawTasksJson, state.dataImageKey);
-    state.summaryIndexByTaskId = indexSummariesByTaskId(state.summaries);
-    state.boxesByTaskId = buildBoxesByTaskId(state.rawTasksJson, state.rectangleLabelsFromName);
-    state.masksByTaskId = buildMasksByTaskId(state.rawTasksJson, state.brushLabelsFromName);
-    state.taskListLoaded = true;
-    state.thumbnailCache.clear();
-    reapplyDatasetBrowserFilter(state);
+    state.taskListWorker.start(std::move(config));
+    state.taskListLoading = true;
 }
 
 void reapplyDatasetBrowserFilter(DatasetBrowserState& state) {
@@ -125,10 +120,10 @@ void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSess
     config.exportJson = buildDatasetExportJson(state.rawTasksJson, state.matchingTaskIds);
 
     config.tasksToExport.reserve(state.matchingTaskIds.size());
-    for (const auto& summary : state.summaries) {
-        if (std::find(state.matchingTaskIds.begin(), state.matchingTaskIds.end(), summary.taskId)
-            != state.matchingTaskIds.end()) {
-            config.tasksToExport.push_back(summary);
+    for (const int taskId : state.matchingTaskIds) {
+        const auto summaryIndexIt = state.summaryIndexByTaskId.find(taskId);
+        if (summaryIndexIt != state.summaryIndexByTaskId.end()) {
+            config.tasksToExport.push_back(state.summaries[summaryIndexIt->second]);
         }
     }
 
@@ -139,6 +134,26 @@ void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSess
 
 void updateDatasetBrowserState(DatasetBrowserState& state, const LabelStudioSessionState& session) {
     syncDatasetBrowserAutoFetch(state, session);
+
+    if (state.taskListLoading) {
+        DatasetTaskListResult taskListResult;
+        if (state.taskListWorker.tryTakeResult(taskListResult)) {
+            state.taskListLoading = false;
+            if (taskListResult.success) {
+                state.taskListError.clear();
+                state.rawTasksJson = std::move(taskListResult.rawTasksJson);
+                state.summaries = std::move(taskListResult.summaries);
+                state.summaryIndexByTaskId = std::move(taskListResult.summaryIndexByTaskId);
+                state.boxesByTaskId = std::move(taskListResult.boxesByTaskId);
+                state.masksByTaskId = std::move(taskListResult.masksByTaskId);
+                state.taskListLoaded = true;
+                state.thumbnailCache.clear();
+                reapplyDatasetBrowserFilter(state);
+            } else {
+                state.taskListError = taskListResult.error;
+            }
+        }
+    }
 
     std::vector<DatasetThumbnailResult> results;
     state.thumbnailWorker.drainResults(results, /*maxResults=*/16);
