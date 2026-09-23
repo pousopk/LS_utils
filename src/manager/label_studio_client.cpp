@@ -954,24 +954,16 @@ LabelStudioPushSummary pushDraftsAsNewLabelStudioTasks(
     return summary;
 }
 
-LabelStudioDownloadResult fetchAndDownloadUnlabeledTasks(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
+LabelStudioTaskImagesDownloadResult downloadUnlabeledTaskImages(
+    const std::string& baseUrl, const std::string& apiToken, const std::vector<LabelStudioUnlabeledTask>& tasks,
     const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress,
     const std::atomic<bool>* cancelRequested) {
-    LabelStudioDownloadResult result;
+    LabelStudioTaskImagesDownloadResult result;
 
-    nlohmann::json allTasks;
-    std::string fetchError;
-    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, fetchError)) {
-        result.error = fetchError;
-        return result;
-    }
-
-    const std::vector<LabelStudioUnlabeledTask> unlabeled = selectUnlabeledTasks(allTasks, dataImageKey);
-    const int total = static_cast<int>(unlabeled.size());
+    const int total = static_cast<int>(tasks.size());
     int completed = 0;
 
-    for (const auto& task : unlabeled) {
+    for (const auto& task : tasks) {
         if (cancelRequested != nullptr && cancelRequested->load()) {
             return result;
         }
@@ -1044,6 +1036,22 @@ LabelStudioTaskImageDownload downloadLabelStudioTaskImages(
     }
 
     return result;
+}
+
+std::vector<TimestampMatchCandidate> dedupTimestampMatchCandidates(
+    const std::vector<std::vector<TimestampMatchCandidate>>& perQuery) {
+    std::vector<TimestampMatchCandidate> allCandidates;
+    for (const auto& candidates : perQuery) {
+        for (const auto& candidate : candidates) {
+            const bool alreadyIncluded = std::any_of(
+                allCandidates.begin(), allCandidates.end(),
+                [&](const TimestampMatchCandidate& c) { return c.taskId == candidate.taskId; });
+            if (!alreadyIncluded) {
+                allCandidates.push_back(candidate);
+            }
+        }
+    }
+    return allCandidates;
 }
 
 LabelStudioAttachSummary attachPredictionsToKnownTasks(

@@ -40,14 +40,6 @@ void LabelingWorker::run(LabelingJobRequest request) {
     result.kind = request.kind;
 
     switch (request.kind) {
-        case LabelingJobKind::FetchTaskList: {
-            const auto& job = request.taskListJob;
-            const auto listResult =
-                fetchLabelStudioTaskSummaries(job.baseUrl, job.projectId, job.apiToken, job.dataImageKey);
-            result.taskList = listResult.tasks;
-            result.taskListError = listResult.error;
-            break;
-        }
         case LabelingJobKind::FetchTaskDetail: {
             const auto& job = request.taskDetailJob;
             result.taskDetail = fetchLabelStudioTaskById(job.baseUrl, job.apiToken, job.taskId, job.dataImageKey);

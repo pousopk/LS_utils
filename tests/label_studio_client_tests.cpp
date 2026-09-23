@@ -719,6 +719,33 @@ void test_parseBrushResultRegions_filtersByFromNameAndType() {
     CHECK(parseBrushResultRegions(result, "brush").empty());
 }
 
+void test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId() {
+    TimestampMatchCandidate a;
+    a.taskId = 1;
+    a.imagePath = "/a.jpg";
+    a.deltaSeconds = 5;
+    TimestampMatchCandidate b;
+    b.taskId = 2;
+    b.imagePath = "/b.jpg";
+    b.deltaSeconds = -3;
+    TimestampMatchCandidate aAgain;
+    aAgain.taskId = 1;
+    aAgain.imagePath = "/a.jpg";
+    aAgain.deltaSeconds = 999;
+
+    const std::vector<std::vector<TimestampMatchCandidate>> perQuery = {{a, b}, {aAgain}};
+    const auto deduped = dedupTimestampMatchCandidates(perQuery);
+
+    CHECK(deduped.size() == 2);
+    CHECK(deduped[0].taskId == 1);
+    CHECK(deduped[0].deltaSeconds == 5);   // first occurrence kept, not the later duplicate
+    CHECK(deduped[1].taskId == 2);
+}
+
+void test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty() {
+    CHECK(dedupTimestampMatchCandidates({}).empty());
+}
+
 } // namespace
 
 int main() {
@@ -783,6 +810,8 @@ int main() {
     test_buildBrushLabelResult_skipsEmptyMask();
     test_parseBrushResultRegions_roundTripsThroughBuild();
     test_parseBrushResultRegions_filtersByFromNameAndType();
+    test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId();
+    test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

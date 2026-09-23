@@ -12,4 +12,4 @@
 // handling in the .cpp); it does not gate whether this function runs.
 void drawLabelingTabContent(
     bool* mergedWindowOpen, LabelingState& state, const LabelStudioSessionState& session,
-    const std::function<void()>& onOpenLabelStudioWindow);
+    SharedLabelStudioProjectData& sharedData, const std::function<void()>& onOpenLabelStudioWindow);

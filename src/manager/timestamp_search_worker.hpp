@@ -10,11 +10,13 @@
 
 struct TimestampSearchRunConfig {
     std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
     std::string labelStudioApiToken;
-    std::string labelStudioDataImageKey;
-    std::vector<TimestampMatchQuery> queries;   // one per still-valid typed entry, same order
-    std::string scratchFolderPath;              // already-created, ideally-cleared download destination
+    // Already matched and deduplicated (see dedupTimestampMatchCandidates)
+    // on the main thread before this worker starts -- matching against
+    // the shared project data doesn't need a network call, so it no
+    // longer happens on this worker's thread.
+    std::vector<TimestampMatchCandidate> candidates;
+    std::string scratchFolderPath;   // already-created, ideally-cleared download destination
 };
 
 struct TimestampSearchProgress {
@@ -24,19 +26,18 @@ struct TimestampSearchProgress {
 };
 
 struct TimestampSearchRunResult {
-    std::vector<std::vector<TimestampMatchCandidate>> perQuery;   // matches TimestampSearchRunConfig.queries order/length
     std::string scratchFolderPath;   // where thumbnails were downloaded, for loading textures afterward
-    std::string error;               // set only on a hard failure to fetch the task list
     bool cancelled = false;
 };
 
-// Runs a timestamp-search job on a single background thread: first fetches
-// and matches tasks (findTasksNearTimestamps), then downloads every
-// distinct matched task's image (deduplicated by task id across queries)
-// into scratchFolderPath, reporting live progress and honoring
-// cancellation during the download phase. Mirrors LabelAssistantWorker's
-// exact shape. Not copyable. Reuse one instance across runs -- start()
-// joins any previous thread first.
+// Runs the thumbnail-download phase of a timestamp search on a single
+// background thread: downloads every already-matched, already-deduplicated
+// candidate's image (see dedupTimestampMatchCandidates) into
+// scratchFolderPath, reporting live progress and honoring cancellation.
+// Matching itself now happens on the main thread before this worker ever
+// starts (see startTimestampSearch) -- it doesn't need a network call, so
+// it doesn't need to be off the UI thread. Not copyable. Reuse one
+// instance across runs -- start() joins any previous thread first.
 class TimestampSearchWorker {
 public:
     TimestampSearchWorker() = default;

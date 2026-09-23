@@ -5,7 +5,6 @@
 
 #include <opencv2/imgcodecs.hpp>
 
-#include <algorithm>
 #include <filesystem>
 
 namespace {
@@ -35,11 +34,11 @@ std::string candidateImageFilePath(const std::string& scratchFolder, const Times
 
 void buildResultGroups(TimestampSearchState& state, const TimestampSearchRunResult& runResult) {
     state.resultGroups.clear();
-    for (size_t i = 0; i < runResult.perQuery.size() && i < state.lastSearchedEntries.size(); ++i) {
+    for (size_t i = 0; i < state.lastPerQueryMatches.size() && i < state.lastSearchedEntries.size(); ++i) {
         TimestampSearchResultGroup group;
         group.entry = state.lastSearchedEntries[i];
 
-        for (const auto& candidate : runResult.perQuery[i]) {
+        for (const auto& candidate : state.lastPerQueryMatches[i]) {
             TimestampSearchCandidateView view;
             view.candidate = candidate;
 
@@ -54,36 +53,10 @@ void buildResultGroups(TimestampSearchState& state, const TimestampSearchRunResu
     }
 }
 
-std::string buildAutoFetchKey(const LabelStudioSessionState& session) {
-    return session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
-}
-
-void syncAutoFetch(TimestampSearchState& state, const LabelStudioSessionState& session) {
-    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
-        return;
-    }
-    const std::string key = buildAutoFetchKey(session);
-    if (key == state.lastAutoFetchKey) {
-        return;
-    }
-    state.lastAutoFetchKey = key;
-
-    // isDetection only affects from_name/to_name extraction, neither of
-    // which this feature uses -- only dataImageKey matters here, and its
-    // extraction doesn't depend on this flag.
-    const LabelStudioLabelingConfig config = fetchLabelStudioLabelingConfig(
-        session.baseUrl, session.activeProjectId, session.apiToken, /*isDetection=*/true);
-    if (config.error.empty()) {
-        state.labelStudioDataImageKey = config.dataImageKey;
-        state.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
-    } else {
-        state.labelStudioAutoFetchStatus = "Labeling config: " + config.error;
-    }
-}
-
 } // namespace
 
-void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionState& session) {
+void startTimestampSearch(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     std::vector<TimestampMatchQuery> queries;
     std::vector<TimestampSearchEntry> searchedEntries;
     for (const auto& entry : state.entries) {
@@ -103,6 +76,10 @@ void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionS
     state.resultError.clear();
     state.lastSearchedEntries = std::move(searchedEntries);
 
+    state.lastPerQueryMatches =
+        matchTasksToTimestamps(sharedData.rawTasksJson, sharedData.projectConfig.dataImageKey, queries);
+    const std::vector<TimestampMatchCandidate> candidates = dedupTimestampMatchCandidates(state.lastPerQueryMatches);
+
     const std::string scratchFolder = timestampSearchScratchFolder();
     std::error_code ec;
     std::filesystem::remove_all(scratchFolder, ec);
@@ -110,10 +87,8 @@ void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionS
 
     TimestampSearchRunConfig config;
     config.labelStudioBaseUrl = session.baseUrl;
-    config.labelStudioProjectId = session.activeProjectId;
     config.labelStudioApiToken = session.apiToken;
-    config.labelStudioDataImageKey = state.labelStudioDataImageKey;
-    config.queries = std::move(queries);
+    config.candidates = candidates;
     config.scratchFolderPath = scratchFolder;
 
     state.worker.start(std::move(config));
@@ -126,14 +101,8 @@ void updateTimestampSearchState(TimestampSearchState& state, const LabelStudioSe
 
         TimestampSearchRunResult runResult;
         if (state.worker.tryTakeResult(runResult)) {
-            if (!runResult.error.empty()) {
-                state.resultError = runResult.error;
-            } else {
-                buildResultGroups(state, runResult);
-            }
+            buildResultGroups(state, runResult);
             state.runState = TimestampSearchRunState::Complete;
         }
     }
-
-    syncAutoFetch(state, session);
 }

@@ -24,26 +24,19 @@ void ensureScratchFolder(LabelingState& state) {
     state.scratchFolderPath = path;
 }
 
-void drawTaskListPanel(LabelingState& state, const LabelStudioSessionState& session) {
+void drawTaskListPanel(LabelingState& state, const LabelStudioSessionState& session, SharedLabelStudioProjectData& sharedData) {
     ImGui::BeginChild("LabelingTaskList", ImVec2(220.0f, 0), true);
 
     const bool canList = !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty()
-        && !state.projectConfig.dataImageKey.empty();
-    ImGui::BeginDisabled(!canList || state.taskListLoading);
+        && !sharedData.projectConfig.dataImageKey.empty();
+    ImGui::BeginDisabled(!canList || sharedData.loading);
     if (ImGui::Button("Refresh task list", ImVec2(-1, 0))) {
-        state.taskListLoading = true;
-        LabelingJobRequest request;
-        request.kind = LabelingJobKind::FetchTaskList;
-        request.taskListJob.baseUrl = session.baseUrl;
-        request.taskListJob.projectId = session.activeProjectId;
-        request.taskListJob.apiToken = session.apiToken;
-        request.taskListJob.dataImageKey = state.projectConfig.dataImageKey;
-        state.worker.start(std::move(request));
+        refreshSharedLabelStudioProjectData(sharedData, session);
     }
     ImGui::EndDisabled();
 
-    if (!state.taskListError.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.taskListError.c_str());
+    if (!sharedData.error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
     }
 
     ImGui::Separator();
@@ -637,7 +630,7 @@ void handleLabelingWindowKeyboardShortcuts(LabelingState& state, const LabelStud
 
 void drawLabelingTabContent(
     bool* mergedWindowOpen, LabelingState& state, const LabelStudioSessionState& session,
-    const std::function<void()>& onOpenLabelStudioWindow) {
+    SharedLabelStudioProjectData& sharedData, const std::function<void()>& onOpenLabelStudioWindow) {
     ensureScratchFolder(state);
 
     if (!state.pendingLocalImagePath.empty() && state.pendingLocalImagePath != state.loadedLocalImagePath) {
@@ -680,7 +673,7 @@ void drawLabelingTabContent(
     ImGui::Separator();
 
     ImGui::BeginChild("LabelingBody", ImVec2(0, 0), false);
-    drawTaskListPanel(state, session);
+    drawTaskListPanel(state, session, sharedData);
     ImGui::SameLine();
     const bool hasEditorPanel = state.boxEditor || state.choiceEditor || state.maskEditor;
     const float editorPanelWidth = 240.0f;

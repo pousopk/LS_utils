@@ -74,19 +74,13 @@ void LabelAssistantWorker::run(LabelAssistantRunConfig config) {
             total_.store(total);
         };
 
-        const LabelStudioDownloadResult downloadResult = fetchAndDownloadUnlabeledTasks(
-            config.labelStudioBaseUrl, config.labelStudioProjectId, config.labelStudioApiToken,
-            config.labelStudioDataImageKey, config.scratchFolderPath, onDownloadProgress, &cancelRequested_);
+        downloadUnlabeledTaskImages(
+            config.labelStudioBaseUrl, config.labelStudioApiToken, config.unlabeledTasks, config.scratchFolderPath,
+            onDownloadProgress, &cancelRequested_);
 
         if (cancelRequested_.load()) {
             LabelAssistantRunResult result;
             result.cancelled = true;
-            finish(std::move(result));
-            return;
-        }
-        if (!downloadResult.error.empty()) {
-            LabelAssistantRunResult result;
-            result.result.error = downloadResult.error;
             finish(std::move(result));
             return;
         }

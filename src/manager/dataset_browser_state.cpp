@@ -1,7 +1,6 @@
 #include "manager/dataset_browser_state.hpp"
 
 #include "manager/app_runtime.hpp"
-#include "manager/label_studio_client.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -35,77 +34,12 @@ void DatasetThumbnailCache::clear() {
     lruOrder.clear();
 }
 
-namespace {
-
-std::string buildAutoFetchKey(const LabelStudioSessionState& session) {
-    return session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
+void reapplyDatasetBrowserFilter(DatasetBrowserState& state, const SharedLabelStudioProjectData& sharedData) {
+    state.matchingTaskIds = filterDatasetTasks(sharedData.summaries, state.filter);
 }
 
-void syncDatasetBrowserAutoFetch(DatasetBrowserState& state, const LabelStudioSessionState& session) {
-    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
-        return;
-    }
-    const std::string key = buildAutoFetchKey(session);
-    if (key == state.lastAutoFetchKey) {
-        return;
-    }
-    state.lastAutoFetchKey = key;
-
-    // Deliberately fetchLabelStudioProjectConfigDetailed, not
-    // fetchLabelStudioLabelingConfig (the one label_assistant_state.cpp
-    // uses): the latter needs an isDetection guess and errors out (leaving
-    // dataImageKey empty too) if the project has no matching control tag
-    // of that guessed type -- e.g. a classification-only project with
-    // isDetection=true. fetchLabelStudioProjectConfigDetailed's
-    // dataImageKey comes from the <Image> tag alone, independent of which
-    // control tags exist, so it works regardless of task type.
-    const LabelStudioProjectConfig config =
-        fetchLabelStudioProjectConfigDetailed(session.baseUrl, session.activeProjectId, session.apiToken);
-    if (!config.error.empty()) {
-        state.taskListError = "Project config: " + config.error;
-        return;
-    }
-    state.dataImageKey = config.dataImageKey;
-
-    state.rectangleLabelsFromName.clear();
-    state.brushLabelsFromName.clear();
-    for (const auto& tag : config.controlTags) {
-        if (tag.type == LabelStudioControlTagType::RectangleLabels && state.rectangleLabelsFromName.empty()) {
-            state.rectangleLabelsFromName = tag.name;
-        } else if (tag.type == LabelStudioControlTagType::BrushLabels && state.brushLabelsFromName.empty()) {
-            state.brushLabelsFromName = tag.name;
-        }
-    }
-    state.thumbnailCache.clear();
-    state.thumbnailWorker.setConnection(session.baseUrl, session.apiToken);
-}
-
-} // namespace
-
-void refreshDatasetBrowserTaskList(DatasetBrowserState& state, const LabelStudioSessionState& session) {
-    if (state.dataImageKey.empty()) {
-        state.taskListError = "Waiting on the project's data image key -- try again in a moment.";
-        return;
-    }
-
-    DatasetTaskListConfig config;
-    config.baseUrl = session.baseUrl;
-    config.projectId = session.activeProjectId;
-    config.apiToken = session.apiToken;
-    config.dataImageKey = state.dataImageKey;
-    config.rectangleLabelsFromName = state.rectangleLabelsFromName;
-    config.brushLabelsFromName = state.brushLabelsFromName;
-
-    state.taskListError.clear();
-    state.taskListWorker.start(std::move(config));
-    state.taskListLoading = true;
-}
-
-void reapplyDatasetBrowserFilter(DatasetBrowserState& state) {
-    state.matchingTaskIds = filterDatasetTasks(state.summaries, state.filter);
-}
-
-void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSessionState& session) {
+void startDatasetBrowserExport(
+    DatasetBrowserState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     if (state.matchingTaskIds.empty() || state.exportDestinationFolder.empty()) {
         return;
     }
@@ -117,13 +51,13 @@ void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSess
     config.baseUrl = session.baseUrl;
     config.apiToken = session.apiToken;
     config.destinationFolder = state.exportDestinationFolder;
-    config.exportJson = buildDatasetExportJson(state.rawTasksJson, state.matchingTaskIds);
+    config.exportJson = buildDatasetExportJson(sharedData.rawTasksJson, state.matchingTaskIds);
 
     config.tasksToExport.reserve(state.matchingTaskIds.size());
     for (const int taskId : state.matchingTaskIds) {
-        const auto summaryIndexIt = state.summaryIndexByTaskId.find(taskId);
-        if (summaryIndexIt != state.summaryIndexByTaskId.end()) {
-            config.tasksToExport.push_back(state.summaries[summaryIndexIt->second]);
+        const auto summaryIndexIt = sharedData.summaryIndexByTaskId.find(taskId);
+        if (summaryIndexIt != sharedData.summaryIndexByTaskId.end()) {
+            config.tasksToExport.push_back(sharedData.summaries[summaryIndexIt->second]);
         }
     }
 
@@ -132,27 +66,16 @@ void startDatasetBrowserExport(DatasetBrowserState& state, const LabelStudioSess
     state.exportState = DatasetExportState::Running;
 }
 
-void updateDatasetBrowserState(DatasetBrowserState& state, const LabelStudioSessionState& session) {
-    syncDatasetBrowserAutoFetch(state, session);
-
-    if (state.taskListLoading) {
-        DatasetTaskListResult taskListResult;
-        if (state.taskListWorker.tryTakeResult(taskListResult)) {
-            state.taskListLoading = false;
-            if (taskListResult.success) {
-                state.taskListError.clear();
-                state.rawTasksJson = std::move(taskListResult.rawTasksJson);
-                state.summaries = std::move(taskListResult.summaries);
-                state.summaryIndexByTaskId = std::move(taskListResult.summaryIndexByTaskId);
-                state.boxesByTaskId = std::move(taskListResult.boxesByTaskId);
-                state.masksByTaskId = std::move(taskListResult.masksByTaskId);
-                state.taskListLoaded = true;
-                state.thumbnailCache.clear();
-                reapplyDatasetBrowserFilter(state);
-            } else {
-                state.taskListError = taskListResult.error;
-            }
-        }
+void updateDatasetBrowserState(
+    DatasetBrowserState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
+    if (sharedData.lastFetchKey != state.lastSeenSharedFetchKey) {
+        state.lastSeenSharedFetchKey = sharedData.lastFetchKey;
+        state.thumbnailCache.clear();
+        state.thumbnailWorker.setConnection(session.baseUrl, session.apiToken);
+    }
+    if (sharedData.version != state.lastAppliedSharedVersion) {
+        state.lastAppliedSharedVersion = sharedData.version;
+        reapplyDatasetBrowserFilter(state, sharedData);
     }
 
     std::vector<DatasetThumbnailResult> results;

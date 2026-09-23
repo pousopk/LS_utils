@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/timestamp_search_worker.hpp"
 
@@ -32,19 +33,21 @@ enum class TimestampSearchRunState {
 };
 
 struct TimestampSearchState {
-    std::string labelStudioDataImageKey;   // auto-fetched, see updateTimestampSearchState
-    std::string lastAutoFetchKey;
-    std::string labelStudioAutoFetchStatus;
-
     int toleranceMinutes = 2;
 
     std::vector<TimestampSearchEntry> entries;
     std::string newEntryText;
 
-    // The entries actually sent to the worker for the run currently
-    // shown in resultGroups -- entries that failed to parse at Search
-    // time are excluded, so this can be a subset of `entries`.
+    // The entries actually matched for the run currently shown in
+    // resultGroups -- entries that failed to parse at Search time are
+    // excluded, so this can be a subset of `entries`.
     std::vector<TimestampSearchEntry> lastSearchedEntries;
+    // Matching happens synchronously on the main thread in
+    // startTimestampSearch (against the shared project data, not a fresh
+    // fetch); stored here so buildResultGroups can pair each candidate
+    // back up with its query/entry once the worker's download phase
+    // finishes -- the worker's own result no longer carries this.
+    std::vector<std::vector<TimestampMatchCandidate>> lastPerQueryMatches;
 
     TimestampSearchWorker worker;
     TimestampSearchRunState runState = TimestampSearchRunState::NotStarted;
@@ -53,19 +56,19 @@ struct TimestampSearchState {
     std::string resultError;
 };
 
-// Builds a TimestampSearchRunConfig from state.entries (skipping any that
-// fail to parse -- they stay in state.entries for the user to fix, just
-// excluded from this run) and state.toleranceMinutes, clears any previous
-// result and its GL textures, (re)creates the hidden scratch download
-// folder, and starts state.worker. Sets state.runState = Running.
-void startTimestampSearch(TimestampSearchState& state, const LabelStudioSessionState& session);
+// Matches state.entries (skipping any that fail to parse -- they stay in
+// state.entries for the user to fix, just excluded from this run) against
+// sharedData's already-loaded task list via matchTasksToTimestamps
+// (synchronous, no network call), storing the result in
+// state.lastPerQueryMatches. Clears any previous result and its GL
+// textures, (re)creates the hidden scratch download folder, deduplicates
+// the matches (dedupTimestampMatchCandidates) and starts state.worker to
+// download just those images. Sets state.runState = Running.
+void startTimestampSearch(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData);
 
-// Called once per main-loop iteration while the window is open: polls
+// Called once per main-loop iteration while the tab is open: polls
 // worker.progress()/tryTakeResult(); on completion, builds resultGroups
-// (loading one GL texture per candidate via cv::imread + uploadFrameToTexture)
-// or sets resultError. Also lazily auto-fetches labelStudioDataImageKey
-// from the Label Studio project once session's connection fields are all
-// set, via fetchLabelStudioLabelingConfig, re-fetching only when
-// (session.baseUrl, session.activeProjectId, session.apiToken) actually
-// changes.
+// from state.lastPerQueryMatches (loading one GL texture per candidate via
+// cv::imread + uploadFrameToTexture).
 void updateTimestampSearchState(TimestampSearchState& state, const LabelStudioSessionState& session);

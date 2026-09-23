@@ -3,6 +3,7 @@
 #include "manager/label_color.hpp"
 #include "manager/label_studio_client.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/labeling_worker.hpp"
 #include "manager/mask_overlay.hpp"
@@ -121,13 +122,18 @@ struct LabelingState {
     LabelingWorker worker;
     std::string scratchFolderPath;   // set once by the window on first open, see Task 8
 
-    std::string lastAutoFetchKey;   // (baseUrl, projectId, apiToken), see updateLabelingState
+    // Compared against SharedLabelStudioProjectData's own lastFetchKey/
+    // version each frame (see updateLabelingState): lastFetchKey changing
+    // means the project switched (re-load projectConfig, reset the
+    // editors); version changing means any successful refresh happened
+    // (re-derive taskList) -- a plain refresh must not reset editors
+    // mid-edit, which is why these are two separate comparisons.
+    std::string lastSeenSharedFetchKey;
+    uint64_t lastAppliedSharedVersion = 0;
     std::string configStatus;
     LabelStudioProjectConfig projectConfig;
 
     std::vector<LabelStudioTaskSummary> taskList;
-    std::string taskListError;
-    bool taskListLoading = false;
 
     int focusTaskId = -1;      // set by a cross-window "Label this" jump, consumed once
     int selectedTaskId = -1;
@@ -188,17 +194,25 @@ nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int ima
 // module the Dataset Browser also uses) -- re-exported here via this
 // include so existing callers of labeling_state.hpp don't need to change.
 
+// Pure function: reduces the shared project data's per-task summaries
+// (DatasetTaskSummary, which also carries class-name/confidence fields
+// this window doesn't use) down to the narrower LabelStudioTaskSummary
+// shape this tab's task list panel and keyboard navigation
+// (nextLabelingTaskId) already work with.
+std::vector<LabelStudioTaskSummary> deriveLabelingTaskList(const std::vector<DatasetTaskSummary>& sharedSummaries);
+
 // Called once per main-loop iteration while the Labeling window is open.
-// Lazily (re)fetches state.projectConfig whenever
-// (session.baseUrl, session.activeProjectId, session.apiToken) changes
-// (same lastAutoFetchKey convention as Label Assistant/Timestamp Search),
-// calling resetLabelingEditorsFromConfig on a successful fetch. Also polls
-// state.worker for a finished job and applies its result: FetchTaskList
-// fills state.taskList/taskListError; FetchTaskDetail fills the editors
-// (via applyTaskDetailToEditors) and state.imageWidth/imageHeight/
-// imageTexture; SubmitAnnotation clears both editors' dirty flags on
-// success and sets state.submitStatus either way.
-void updateLabelingState(LabelingState& state, const LabelStudioSessionState& session);
+// Compares sharedData.lastFetchKey against state.lastSeenSharedFetchKey:
+// on a change (project switch or reconnect), copies sharedData.projectConfig
+// and calls resetLabelingEditorsFromConfig. Compares sharedData.version
+// against state.lastAppliedSharedVersion: on a change (any successful
+// refresh), re-derives state.taskList via deriveLabelingTaskList. Also
+// polls state.worker for a finished job and applies its result:
+// FetchTaskDetail fills the editors (via applyTaskDetailToEditors) and
+// state.imageWidth/imageHeight/imageTexture; SubmitAnnotation clears both
+// editors' dirty flags on success and sets state.submitStatus either way.
+void updateLabelingState(
+    LabelingState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData);
 
 // Requests switching the selected task to `taskId`. If anyEditorDirty(state)
 // is true, opens the unsaved-changes prompt instead of switching

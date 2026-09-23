@@ -1,6 +1,7 @@
 #include "manager/label_assistant_state.hpp"
 
 #include "manager/app_runtime.hpp"
+#include "manager/label_assistant_control_tag.hpp"
 #include "manager/label_studio_client.hpp"
 
 #include <opencv2/imgcodecs.hpp>
@@ -31,7 +32,8 @@ std::string labelAssistantScratchFolder() {
 
 } // namespace
 
-void startLabelAssistantRun(LabelAssistantState& state, const LabelStudioSessionState& session) {
+void startLabelAssistantRun(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     LabelAssistantRunConfig config;
     config.mode = state.taskMode;
     config.detectionModel = state.modelConfig.detectionModel;
@@ -47,9 +49,8 @@ void startLabelAssistantRun(LabelAssistantState& state, const LabelStudioSession
         std::filesystem::create_directories(scratchFolder, ec);
 
         config.labelStudioBaseUrl = session.baseUrl;
-        config.labelStudioProjectId = session.activeProjectId;
         config.labelStudioApiToken = session.apiToken;
-        config.labelStudioDataImageKey = state.labelStudioDataImageKey;
+        config.unlabeledTasks = selectUnlabeledTasks(sharedData.rawTasksJson, sharedData.projectConfig.dataImageKey);
         config.scratchFolderPath = scratchFolder;
         state.imageFolderPath = scratchFolder;
     } else {
@@ -115,33 +116,26 @@ void syncLabelAssistantSelectedPreview(LabelAssistantState& state) {
     uploadFrameToTexture(state.previewTexture, toUpload, state.previewTextureWidth, state.previewTextureHeight);
 }
 
-std::string buildAutoFetchKey(const LabelAssistantState& state, const LabelStudioSessionState& session) {
-    return session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken + "|"
-        + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
+std::string buildControlTagKey(const LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
+    return sharedData.lastFetchKey + "|" + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
 }
 
-void syncLabelAssistantAutoFetch(LabelAssistantState& state, const LabelStudioSessionState& session) {
-    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
+void syncLabelAssistantControlTag(LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
+    if (sharedData.lastFetchKey.empty()) {
         return;
     }
-    const std::string key = buildAutoFetchKey(state, session);
+    const std::string key = buildControlTagKey(state, sharedData);
     if (key == state.lastAutoFetchKey) {
         return;
     }
     state.lastAutoFetchKey = key;
 
-    const bool isDetection = state.taskMode == ComparisonTaskMode::Detection;
-    const LabelStudioLabelingConfig config = fetchLabelStudioLabelingConfig(
-        session.baseUrl, session.activeProjectId, session.apiToken, isDetection);
-
-    if (config.error.empty()) {
-        state.labelFromName = config.fromName;
-        state.imageToName = config.toName;
-        state.labelStudioDataImageKey = config.dataImageKey;
-        state.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
-    } else {
-        state.labelStudioAutoFetchStatus = "Labeling config: " + config.error;
-    }
+    const LabelAssistantControlTagResolution resolution =
+        resolveLabelAssistantControlTag(sharedData.projectConfig.controlTags, state.taskMode);
+    state.labelFromName = resolution.fromName;
+    state.imageToName = resolution.toName;
+    state.labelStudioAutoFetchStatus =
+        resolution.error.empty() ? "Auto-filled from Label Studio project settings" : resolution.error;
 }
 
 } // namespace
@@ -170,7 +164,8 @@ std::string describePushResult(const LabelAssistantState& state, const LabelStud
 
 } // namespace
 
-void updateLabelAssistantState(LabelAssistantState& state, const LabelStudioSessionState& session) {
+void updateLabelAssistantState(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     if (state.runState == LabelAssistantRunState::Running) {
         state.lastProgress = state.worker.progress();
 
@@ -196,7 +191,7 @@ void updateLabelAssistantState(LabelAssistantState& state, const LabelStudioSess
         }
     }
 
-    syncLabelAssistantAutoFetch(state, session);
+    syncLabelAssistantControlTag(state, sharedData);
 
     syncLabelAssistantSelectedPreview(state);
 }
