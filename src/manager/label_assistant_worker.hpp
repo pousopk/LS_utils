@@ -3,6 +3,7 @@
 #include "manager/classification_inference.hpp"
 #include "manager/comparison_task_mode.hpp"
 #include "manager/label_assistant.hpp"
+#include "manager/label_studio_client.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <atomic>
@@ -31,14 +32,16 @@ struct LabelAssistantRunConfig {
     // LocalFolder: the folder to scan directly.
     std::string imageFolderPath;
 
-    // LabelStudioProject: connection details for the download phase, plus
-    // the (already-created, ideally-cleared) scratch folder downloaded
-    // images are written into -- this becomes the folder scanned for the
-    // inference phase, exactly as if it were imageFolderPath.
+    // LabelStudioProject: connection details for the download phase, the
+    // already-selected unlabeled tasks to download (selected on the main
+    // thread from the shared project data before this worker starts --
+    // see startLabelAssistantRun), and the (already-created,
+    // ideally-cleared) scratch folder downloaded images are written into
+    // -- this becomes the folder scanned for the inference phase, exactly
+    // as if it were imageFolderPath.
     std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
     std::string labelStudioApiToken;
-    std::string labelStudioDataImageKey;
+    std::vector<LabelStudioUnlabeledTask> unlabeledTasks;
     std::string scratchFolderPath;
 };
 
@@ -59,10 +62,13 @@ struct LabelAssistantRunResult {
 // Mirrors BatchEvaluationWorker's exact shape, minus the two-slot
 // machinery (one model, one run). In LabelStudioProject source mode,
 // run() does two sequential phases -- download (via
-// fetchAndDownloadUnlabeledTasks) then the same inference phase
-// LocalFolder mode uses (via runAutoLabel) -- each restarting
-// completed/total from zero, distinguished by
-// LabelAssistantProgress::phaseLabel.
+// downloadUnlabeledTaskImages, given the already-selected task list in
+// config.unlabeledTasks) then the same inference phase LocalFolder mode
+// uses (via runAutoLabel) -- each restarting completed/total from zero,
+// distinguished by LabelAssistantProgress::phaseLabel. Unlike before,
+// this worker no longer fetches or selects which tasks are unlabeled
+// itself -- that happens on the main thread, against the shared project
+// data, before this worker ever starts.
 class LabelAssistantWorker {
 public:
     LabelAssistantWorker() = default;

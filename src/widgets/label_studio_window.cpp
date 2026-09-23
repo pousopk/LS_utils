@@ -115,7 +115,9 @@ void drawLabelStudioWindow(AppUi& ui) {
             labelingFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Labeling", nullptr, labelingFlags)) {
-            drawLabelingTabContent(&ui.showLabelStudioWindow, ui.labelingState, ui.labelStudioSession, onOpenConnectionTab);
+            drawLabelingTabContent(
+                &ui.showLabelStudioWindow, ui.labelingState, ui.labelStudioSession, ui.labelStudioProjectData,
+                onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 
@@ -124,7 +126,9 @@ void drawLabelStudioWindow(AppUi& ui) {
             labelAssistantFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Label Assistant", nullptr, labelAssistantFlags)) {
-            drawLabelAssistantTabContent(ui.labelAssistantState, ui.labelStudioSession, onLabelTask, onOpenConnectionTab);
+            drawLabelAssistantTabContent(
+                ui.labelAssistantState, ui.labelStudioSession, ui.labelStudioProjectData, onLabelTask,
+                onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 
@@ -133,7 +137,9 @@ void drawLabelStudioWindow(AppUi& ui) {
             timestampSearchFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Find by Timestamp", nullptr, timestampSearchFlags)) {
-            drawTimestampSearchTabContent(ui.timestampSearchState, ui.labelStudioSession, onLabelTask, onOpenConnectionTab);
+            drawTimestampSearchTabContent(
+                ui.timestampSearchState, ui.labelStudioSession, ui.labelStudioProjectData, onLabelTask,
+                onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 
@@ -142,7 +148,8 @@ void drawLabelStudioWindow(AppUi& ui) {
             datasetBrowserFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Dataset Browser", nullptr, datasetBrowserFlags)) {
-            drawDatasetBrowserTabContent(ui.datasetBrowserState, ui.labelStudioSession, onOpenConnectionTab);
+            drawDatasetBrowserTabContent(
+                ui.datasetBrowserState, ui.labelStudioSession, ui.labelStudioProjectData, onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 

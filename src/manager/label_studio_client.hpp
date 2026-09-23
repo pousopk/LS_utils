@@ -64,6 +64,18 @@ struct TimestampMatchCandidate {
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
 
+// Pure function: flattens `perQuery` (one candidate list per typed
+// timestamp entry) into a single list with each task id appearing at
+// most once -- a task matching more than one query's window should only
+// be downloaded once. The first occurrence of a task id (in `perQuery`'s
+// own order) is kept; later duplicates are dropped. Extracted out of
+// TimestampSearchWorker, which used to do this dedup itself right before
+// downloading -- now the caller does it before ever starting that
+// worker, since matching happens on the main thread (see
+// startTimestampSearch).
+std::vector<TimestampMatchCandidate> dedupTimestampMatchCandidates(
+    const std::vector<std::vector<TimestampMatchCandidate>>& perQuery);
+
 struct FindTasksNearTimestampsResult {
     std::vector<std::vector<TimestampMatchCandidate>> perQuery;   // same order/length as `queries`
     std::string error;   // set only on a hard failure to fetch the task list; zero candidates for a query is normal
@@ -296,29 +308,30 @@ std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
 // general-purpose parser.
 std::optional<int> parseTaskIdFromFilename(const std::string& filename);
 
-struct LabelStudioDownloadResult {
+struct LabelStudioTaskImagesDownloadResult {
     int downloaded = 0;      // images successfully downloaded
-    int downloadFailed = 0;  // an unlabeled task's image failed to download
-    std::string error;       // set only on a hard failure (couldn't fetch the task list at all)
+    int downloadFailed = 0;  // a task's image failed to download
 };
 
-// Fetches the project's tasks, selects the unlabeled ones (via
-// selectUnlabeledTasks), and downloads each one's image (an authenticated
-// GET to `{baseUrl}{imagePath}`, same auth as every other call here) into
+// Downloads each of `tasks`' images (an authenticated GET to
+// `{baseUrl}{imagePath}`, same auth as every other call here) into
 // `outputFolder` as `<taskId><original extension>` -- the task id is
 // encoded directly in the filename so no separate id-to-file mapping
 // needs to be tracked; `parseTaskIdFromFilename` recovers it later.
 // `outputFolder` is not created or cleared by this function -- the caller
-// (this window's "Label Studio Project" source mode) is responsible for
-// giving it a clean, already-existing directory. `onProgress` (if
-// non-null) is called once per download attempt, with `total` fixed at
-// the unlabeled-task count. `cancelRequested` (if non-null and observed
-// true) stops the loop early, returning whatever completed so far with
-// `error` left empty. Individual download failures are counted in
-// `downloadFailed`, not treated as fatal; only a failure to fetch the
-// task list itself sets `error`.
-LabelStudioDownloadResult fetchAndDownloadUnlabeledTasks(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
+// is responsible for giving it a clean, already-existing directory.
+// `onProgress` (if non-null) is called once per download attempt, with
+// `total` fixed at `tasks.size()`. `cancelRequested` (if non-null and
+// observed true) stops the loop early, returning whatever completed so
+// far. Individual download failures are counted in `downloadFailed`, not
+// fatal -- unlike the fused fetchAndDownloadUnlabeledTasks this replaces,
+// there's no longer a hard-failure mode here at all, since selecting
+// which tasks to download (the only step that used to fail hard, by
+// failing to fetch the task list) now happens separately, before this is
+// ever called (see selectUnlabeledTasks, called from
+// startLabelAssistantRun against the shared project data).
+LabelStudioTaskImagesDownloadResult downloadUnlabeledTaskImages(
+    const std::string& baseUrl, const std::string& apiToken, const std::vector<LabelStudioUnlabeledTask>& tasks,
     const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress = nullptr,
     const std::atomic<bool>* cancelRequested = nullptr);
 

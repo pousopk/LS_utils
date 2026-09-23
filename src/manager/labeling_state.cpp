@@ -168,20 +168,31 @@ nlohmann::json buildCombinedAnnotationResult(const LabelingState& state, int ima
     return combined;
 }
 
-void updateLabelingState(LabelingState& state, const LabelStudioSessionState& session) {
-    const std::string key =
-        session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
-    if (!session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty()
-        && key != state.lastAutoFetchKey) {
-        state.lastAutoFetchKey = key;
-        state.projectConfig =
-            fetchLabelStudioProjectConfigDetailed(session.baseUrl, session.activeProjectId, session.apiToken);
+std::vector<LabelStudioTaskSummary> deriveLabelingTaskList(const std::vector<DatasetTaskSummary>& sharedSummaries) {
+    std::vector<LabelStudioTaskSummary> out;
+    out.reserve(sharedSummaries.size());
+    for (const auto& summary : sharedSummaries) {
+        out.push_back(
+            LabelStudioTaskSummary{summary.taskId, summary.imagePath, summary.hasAnnotation, summary.hasPrediction});
+    }
+    return out;
+}
+
+void updateLabelingState(
+    LabelingState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
+    if (sharedData.lastFetchKey != state.lastSeenSharedFetchKey) {
+        state.lastSeenSharedFetchKey = sharedData.lastFetchKey;
+        state.projectConfig = sharedData.projectConfig;
         if (!state.projectConfig.error.empty()) {
             state.configStatus = "Config error: " + state.projectConfig.error;
         } else {
             state.configStatus = "Loaded " + std::to_string(state.projectConfig.controlTags.size()) + " control tag(s)";
             resetLabelingEditorsFromConfig(state);
         }
+    }
+    if (sharedData.version != state.lastAppliedSharedVersion) {
+        state.lastAppliedSharedVersion = sharedData.version;
+        state.taskList = deriveLabelingTaskList(sharedData.summaries);
     }
 
     LabelingJobResult result;
@@ -190,11 +201,6 @@ void updateLabelingState(LabelingState& state, const LabelStudioSessionState& se
     }
 
     switch (result.kind) {
-        case LabelingJobKind::FetchTaskList:
-            state.taskListLoading = false;
-            state.taskList = result.taskList;
-            state.taskListError = result.taskListError;
-            break;
         case LabelingJobKind::FetchTaskDetail:
             if (!result.taskDetailError.empty()) {
                 state.taskLoadState = LabelingTaskLoadState::Failed;

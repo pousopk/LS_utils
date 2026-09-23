@@ -96,7 +96,8 @@ void drawFolderPicker(LabelAssistantState& state) {
     }
 }
 
-void drawRunBar(LabelAssistantState& state, const LabelStudioSessionState& session) {
+void drawRunBar(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     ImGui::Separator();
     if (state.runState == LabelAssistantRunState::Running) {
         if (!state.lastProgress.phaseLabel.empty()) {
@@ -125,18 +126,18 @@ void drawRunBar(LabelAssistantState& state, const LabelStudioSessionState& sessi
         : state.modelConfig.classificationModel != nullptr;
     const bool sourceReady = state.sourceMode == LabelAssistantSourceMode::LocalFolder
         ? !state.imageFolderPath.empty()
-        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty();
+        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty() && sharedData.loaded;
     const bool canRun = modelLoaded && sourceReady;
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
-        startLabelAssistantRun(state, session);
+        startLabelAssistantRun(state, session, sharedData);
     }
     ImGui::EndDisabled();
     if (!canRun) {
         ImGui::TextDisabled(
             state.sourceMode == LabelAssistantSourceMode::LocalFolder
                 ? "Load a model matching the selected mode and pick an image folder to run."
-                : "Load a model matching the selected mode and fill in the Label Studio connection to run.");
+                : "Load a model matching the selected mode and wait for the task list to load to run.");
     }
 }
 
@@ -432,8 +433,8 @@ void drawFilePickerPopup(LabelAssistantState& state) {
 } // namespace
 
 void drawLabelAssistantTabContent(
-    LabelAssistantState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask,
-    const std::function<void()>& onOpenLabelStudioWindow) {
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
+    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
     drawTaskModeToggle(state);
     ImGui::Separator();
 
@@ -451,7 +452,7 @@ void drawLabelAssistantTabContent(
     }
     ImGui::Separator();
 
-    drawRunBar(state, session);
+    drawRunBar(state, session, sharedData);
 
     if (state.runState == LabelAssistantRunState::Complete) {
         ImGui::Separator();

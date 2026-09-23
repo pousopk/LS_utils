@@ -16,7 +16,7 @@ constexpr float kThumbnailCellSize = 150.0f;
 constexpr float kThumbnailCellSpacing = 8.0f;
 constexpr int kGridLookaheadRows = 2;
 
-void drawFilterControls(DatasetBrowserState& state) {
+void drawFilterControls(DatasetBrowserState& state, const SharedLabelStudioProjectData& sharedData) {
     bool filterChanged = false;
 
     static const char* kPresenceLabels[] = {"Any", "Has", "Lacks"};
@@ -49,7 +49,7 @@ void drawFilterControls(DatasetBrowserState& state) {
     ImGui::EndDisabled();
 
     if (filterChanged) {
-        reapplyDatasetBrowserFilter(state);
+        reapplyDatasetBrowserFilter(state, sharedData);
     }
 
     // Which box list gets baked into thumbnails -- doesn't affect which
@@ -70,7 +70,7 @@ void drawFilterControls(DatasetBrowserState& state) {
     }
 }
 
-void drawGrid(DatasetBrowserState& state) {
+void drawGrid(DatasetBrowserState& state, const SharedLabelStudioProjectData& sharedData) {
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const int columns = std::max(1, static_cast<int>(availableWidth / (kThumbnailCellSize + kThumbnailCellSpacing)));
     const int itemCount = static_cast<int>(state.matchingTaskIds.size());
@@ -133,16 +133,18 @@ void drawGrid(DatasetBrowserState& state) {
     for (const int taskId : visibleAndLookaheadIds) {
         state.thumbnailCache.touch(taskId);
         if (state.thumbnailCache.entries.find(taskId) == state.thumbnailCache.entries.end()) {
-            const auto summaryIndexIt = state.summaryIndexByTaskId.find(taskId);
-            if (summaryIndexIt != state.summaryIndexByTaskId.end()) {
-                const auto boxesIt = state.boxesByTaskId.find(taskId);
-                const auto masksIt = state.masksByTaskId.find(taskId);
-                const DatasetBoxesToDraw& boxes = boxesIt != state.boxesByTaskId.end() ? boxesIt->second : kEmptyBoxes;
-                const DatasetMasksToDraw& masks = masksIt != state.masksByTaskId.end() ? masksIt->second : kEmptyMasks;
+            const auto summaryIndexIt = sharedData.summaryIndexByTaskId.find(taskId);
+            if (summaryIndexIt != sharedData.summaryIndexByTaskId.end()) {
+                const auto boxesIt = sharedData.boxesByTaskId.find(taskId);
+                const auto masksIt = sharedData.masksByTaskId.find(taskId);
+                const DatasetBoxesToDraw& boxes =
+                    boxesIt != sharedData.boxesByTaskId.end() ? boxesIt->second : kEmptyBoxes;
+                const DatasetMasksToDraw& masks =
+                    masksIt != sharedData.masksByTaskId.end() ? masksIt->second : kEmptyMasks;
                 const bool showAnnotations = state.overlayMode == DatasetOverlayMode::Annotations;
                 const auto& boxesToDraw = showAnnotations ? boxes.annotationBoxes : boxes.predictionBoxes;
                 const auto& masksToDraw = showAnnotations ? masks.annotationMasks : masks.predictionMasks;
-                const std::string& imagePath = state.summaries[summaryIndexIt->second].imagePath;
+                const std::string& imagePath = sharedData.summaries[summaryIndexIt->second].imagePath;
                 state.thumbnailWorker.requestThumbnail(
                     DatasetThumbnailRequest{taskId, imagePath, boxesToDraw, masksToDraw});
             }
@@ -154,7 +156,7 @@ void drawGrid(DatasetBrowserState& state) {
     ImGui::EndChild();
 }
 
-void drawSelectedTaskDetail(DatasetBrowserState& state) {
+void drawSelectedTaskDetail(DatasetBrowserState& state, const SharedLabelStudioProjectData& sharedData) {
     ImGui::BeginChild("DatasetBrowserDetail", ImVec2(320.0f, 0), true);
     if (!state.selectedTaskId) {
         ImGui::TextDisabled("Click a thumbnail to preview it here.");
@@ -163,13 +165,13 @@ void drawSelectedTaskDetail(DatasetBrowserState& state) {
     }
 
     const int selectedId = *state.selectedTaskId;
-    const auto summaryIndexIt = state.summaryIndexByTaskId.find(selectedId);
-    if (summaryIndexIt == state.summaryIndexByTaskId.end()) {
+    const auto summaryIndexIt = sharedData.summaryIndexByTaskId.find(selectedId);
+    if (summaryIndexIt == sharedData.summaryIndexByTaskId.end()) {
         ImGui::TextDisabled("Task no longer in the current list.");
         ImGui::EndChild();
         return;
     }
-    const DatasetTaskSummary& summary = state.summaries[summaryIndexIt->second];
+    const DatasetTaskSummary& summary = sharedData.summaries[summaryIndexIt->second];
 
     ImGui::Text("Task #%d", summary.taskId);
     ImGui::Text("Annotation: %s", summary.hasAnnotation ? "yes" : "no");
@@ -222,7 +224,8 @@ void drawExportFolderPickerPopup(DatasetBrowserState& state) {
     }
 }
 
-void drawExportSection(DatasetBrowserState& state, const LabelStudioSessionState& session) {
+void drawExportSection(
+    DatasetBrowserState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     ImGui::Separator();
     ImGui::TextWrapped(
         "Export folder: %s", state.exportDestinationFolder.empty() ? "(none)" : state.exportDestinationFolder.c_str());
@@ -250,7 +253,7 @@ void drawExportSection(DatasetBrowserState& state, const LabelStudioSessionState
     const bool canExport = !state.matchingTaskIds.empty() && !state.exportDestinationFolder.empty();
     ImGui::BeginDisabled(!canExport);
     if (ImGui::Button("Export")) {
-        startDatasetBrowserExport(state, session);
+        startDatasetBrowserExport(state, session, sharedData);
     }
     ImGui::EndDisabled();
     if (!state.exportStatus.empty()) {
@@ -261,43 +264,43 @@ void drawExportSection(DatasetBrowserState& state, const LabelStudioSessionState
 } // namespace
 
 void drawDatasetBrowserTabContent(
-    DatasetBrowserState& state, const LabelStudioSessionState& session,
+    DatasetBrowserState& state, const LabelStudioSessionState& session, SharedLabelStudioProjectData& sharedData,
     const std::function<void()>& onOpenLabelStudioWindow) {
     drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
 
     const bool canBrowse = session.status == LabelStudioSessionStatus::Connected && session.activeProjectId > 0;
-    ImGui::BeginDisabled(!canBrowse || state.taskListLoading);
+    ImGui::BeginDisabled(!canBrowse || sharedData.loading);
     if (ImGui::Button("Refresh")) {
-        refreshDatasetBrowserTaskList(state, session);
+        refreshSharedLabelStudioProjectData(sharedData, session);
     }
     ImGui::EndDisabled();
 
-    if (state.taskListLoading) {
+    if (sharedData.loading) {
         ImGui::SameLine();
         ImGui::TextDisabled("Loading tasks...");
     }
 
-    if (!state.taskListError.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.taskListError.c_str());
+    if (!sharedData.error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
     }
 
-    if (!state.taskListLoaded) {
+    if (!sharedData.loaded) {
         ImGui::TextDisabled("Click Refresh to load this project's tasks.");
         return;
     }
 
-    drawFilterControls(state);
-    ImGui::Text("%zu of %zu tasks match", state.matchingTaskIds.size(), state.summaries.size());
+    drawFilterControls(state, sharedData);
+    ImGui::Text("%zu of %zu tasks match", state.matchingTaskIds.size(), sharedData.summaries.size());
 
-    drawExportSection(state, session);
+    drawExportSection(state, session, sharedData);
     drawExportFolderPickerPopup(state);
 
     ImGui::Separator();
     ImGui::BeginChild("DatasetBrowserBody", ImVec2(0, 0), false);
     ImGui::BeginChild("DatasetBrowserGridPane", ImVec2(-330.0f, 0), false);
-    drawGrid(state);
+    drawGrid(state, sharedData);
     ImGui::EndChild();
     ImGui::SameLine();
-    drawSelectedTaskDetail(state);
+    drawSelectedTaskDetail(state, sharedData);
     ImGui::EndChild();
 }

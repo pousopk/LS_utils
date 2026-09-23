@@ -64,44 +64,16 @@ void TimestampSearchWorker::beginPhase(const std::string& label) {
 }
 
 void TimestampSearchWorker::run(TimestampSearchRunConfig config) {
-    beginPhase("Searching");
-
-    const FindTasksNearTimestampsResult searchResult = findTasksNearTimestamps(
-        config.labelStudioBaseUrl, config.labelStudioProjectId, config.labelStudioApiToken,
-        config.labelStudioDataImageKey, config.queries);
-
-    if (!searchResult.error.empty()) {
-        TimestampSearchRunResult result;
-        result.error = searchResult.error;
-        finish(std::move(result));
-        return;
-    }
-
-    // Dedup by task id across queries before downloading -- a task
-    // matching more than one typed entry should only be fetched once.
-    std::vector<TimestampMatchCandidate> allCandidates;
-    for (const auto& candidates : searchResult.perQuery) {
-        for (const auto& candidate : candidates) {
-            const bool alreadyIncluded = std::any_of(
-                allCandidates.begin(), allCandidates.end(),
-                [&](const TimestampMatchCandidate& c) { return c.taskId == candidate.taskId; });
-            if (!alreadyIncluded) {
-                allCandidates.push_back(candidate);
-            }
-        }
-    }
-
     beginPhase("Downloading thumbnails");
     const auto onProgress = [this](int completed, int total) {
         completed_.store(completed);
         total_.store(total);
     };
     downloadLabelStudioTaskImages(
-        config.labelStudioBaseUrl, config.labelStudioApiToken, allCandidates, config.scratchFolderPath, onProgress,
-        &cancelRequested_);
+        config.labelStudioBaseUrl, config.labelStudioApiToken, config.candidates, config.scratchFolderPath,
+        onProgress, &cancelRequested_);
 
     TimestampSearchRunResult result;
-    result.perQuery = searchResult.perQuery;
     result.scratchFolderPath = config.scratchFolderPath;
     result.cancelled = cancelRequested_.load();
     finish(std::move(result));

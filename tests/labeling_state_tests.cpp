@@ -1,6 +1,9 @@
 #include "manager/labeling_state.hpp"
 
+#include "manager/label_studio_dataset_browser.hpp"
+
 #include <cstdio>
+#include <optional>
 
 namespace {
 int g_failures = 0;
@@ -513,6 +516,22 @@ void test_rotatedBoxCorners_ninetyDegrees() {
     CHECK(std::abs(corners[3].y - 0.0f) < 0.01f);
 }
 
+void test_deriveLabelingTaskList_copiesTaskIdImagePathAndPresenceFlagsOnly() {
+    const std::vector<DatasetTaskSummary> sharedSummaries = {
+        DatasetTaskSummary{1, "/a.jpg", true, false, {"Cat"}, std::nullopt, std::nullopt},
+        DatasetTaskSummary{2, "/b.jpg", false, true, {"Dog"}, 0.9f, 0.9f},
+    };
+    const auto taskList = deriveLabelingTaskList(sharedSummaries);
+    CHECK(taskList.size() == 2);
+    CHECK(taskList[0].taskId == 1);
+    CHECK(taskList[0].imagePath == "/a.jpg");
+    CHECK(taskList[0].hasAnnotation);
+    CHECK(!taskList[0].hasPrediction);
+    CHECK(taskList[1].taskId == 2);
+    CHECK(!taskList[1].hasAnnotation);
+    CHECK(taskList[1].hasPrediction);
+}
+
 } // namespace
 
 int main() {
@@ -556,6 +575,7 @@ int main() {
     test_resizeRotatedBox_keepsAnchorFixedOnScreenWhenRotated();
     test_rotateBoxAroundCenter_ninetyDegreeDelta();
     test_rotateBoxAroundCenter_keepsCenterFixed();
+    test_deriveLabelingTaskList_copiesTaskIdImagePathAndPresenceFlagsOnly();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

@@ -10,16 +10,8 @@
 #include <vector>
 
 enum class LabelingJobKind {
-    FetchTaskList,
     FetchTaskDetail,
     SubmitAnnotation,
-};
-
-struct LabelingTaskListJob {
-    std::string baseUrl;
-    int projectId = 0;
-    std::string apiToken;
-    std::string dataImageKey;
 };
 
 struct LabelingTaskDetailJob {
@@ -39,17 +31,13 @@ struct LabelingSubmitJob {
 };
 
 struct LabelingJobRequest {
-    LabelingJobKind kind = LabelingJobKind::FetchTaskList;
-    LabelingTaskListJob taskListJob;
+    LabelingJobKind kind = LabelingJobKind::FetchTaskDetail;
     LabelingTaskDetailJob taskDetailJob;
     LabelingSubmitJob submitJob;
 };
 
 struct LabelingJobResult {
-    LabelingJobKind kind = LabelingJobKind::FetchTaskList;
-
-    std::vector<LabelStudioTaskSummary> taskList;   // FetchTaskList
-    std::string taskListError;
+    LabelingJobKind kind = LabelingJobKind::FetchTaskDetail;
 
     LabelStudioTaskDetail taskDetail;               // FetchTaskDetail
     std::string localImagePath;                     // FetchTaskDetail: downloaded image path, empty on failure
