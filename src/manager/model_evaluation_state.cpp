@@ -369,15 +369,6 @@ void updateLiveRuntime(
 
 namespace {
 
-const BatchImageResult* findBatchImage(const BatchEvaluationResult& result, const std::string& filename) {
-    for (const auto& image : result.images) {
-        if (image.imageFilename == filename) {
-            return &image;
-        }
-    }
-    return nullptr;
-}
-
 void syncBatchEvalSelectedPreview(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
     BatchRuntime& batch) {
@@ -529,6 +520,8 @@ void startBatchEvaluationRun(
     batch.classificationMetricsA = ClassificationMetrics{};
     batch.classificationMetricsB = ClassificationMetrics{};
     batch.selectedImageFilename.reset();
+    // The confusion matrices a cell filter pointed into are about to be replaced.
+    batch.filters.confusionCell.reset();
 
     batch.worker.start(std::move(config));
     batch.runState = BatchEvalRunState::Running;
@@ -576,142 +569,6 @@ void updateBatchRuntime(
     syncBatchEvalSelectedPreview(mode, slots, imageFolderPath, batch);
 }
 
-bool isBatchEvalImageMismatch(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
-    const BatchImageResult* imageA = findBatchImage(batch.resultA, filename);
-    const BatchImageResult* imageB = findBatchImage(batch.resultB, filename);
-    if ((imageA == nullptr || !imageA->hasGroundTruth) && (imageB == nullptr || !imageB->hasGroundTruth)) {
-        return false;
-    }
-
-    if (mode == ComparisonTaskMode::Classification) {
-        const auto isMismatch = [](const BatchImageResult* image) {
-            if (image == nullptr || !image->hasGroundTruth || image->predictions.empty()) {
-                return false;
-            }
-            return image->predictions.front().className != image->groundTruthLabel;
-        };
-        return isMismatch(imageA) || isMismatch(imageB);
-    }
-
-    const auto hasUnmatchedBox = [](const BatchImageResult* image) {
-        if (image == nullptr || !image->hasGroundTruth) {
-            return false;
-        }
-        std::vector<bool> matched(image->groundTruthBoxes.size(), false);
-        int falsePositives = 0;
-        for (const auto& prediction : image->detections) {
-            int bestIdx = -1;
-            float bestIoU = 0.5f;
-            for (size_t i = 0; i < image->groundTruthBoxes.size(); ++i) {
-                if (matched[i] || image->groundTruthBoxes[i].className != prediction.className) {
-                    continue;
-                }
-                const float iou = computeRotatedIoU(
-                    prediction.box, prediction.rotationDegrees,
-                    image->groundTruthBoxes[i].box, image->groundTruthBoxes[i].rotationDegrees);
-                if (iou >= bestIoU) {
-                    bestIoU = iou;
-                    bestIdx = static_cast<int>(i);
-                }
-            }
-            if (bestIdx >= 0) {
-                matched[static_cast<size_t>(bestIdx)] = true;
-            } else {
-                falsePositives++;
-            }
-        }
-        const bool hasFalseNegative = std::any_of(matched.begin(), matched.end(), [](bool m) { return !m; });
-        return falsePositives > 0 || hasFalseNegative;
-    };
-
-    return hasUnmatchedBox(imageA) || hasUnmatchedBox(imageB);
-}
-
-std::optional<float> batchEvalImageConfidence(
-    ComparisonTaskMode mode, const BatchEvaluationResult& result, const std::string& filename) {
-    const BatchImageResult* image = findBatchImage(result, filename);
-    if (image == nullptr) {
-        return std::nullopt;
-    }
-    if (mode == ComparisonTaskMode::Classification) {
-        if (image->predictions.empty()) {
-            return std::nullopt;
-        }
-        return image->predictions.front().probability;
-    }
-    if (mode == ComparisonTaskMode::Anomaly) {
-        if (!image->anomalyResult) {
-            return std::nullopt;
-        }
-        return image->anomalyResult->score;
-    }
-    if (image->detections.empty()) {
-        return std::nullopt;
-    }
-    float sum = 0.0f;
-    for (const auto& detection : image->detections) {
-        sum += detection.confidence;
-    }
-    return sum / static_cast<float>(image->detections.size());
-}
-
-bool batchEvalImagePassesConfidenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
-    if (batch.confidenceFilterMode == BatchEvalConfidenceFilterMode::None) {
-        return true;
-    }
-    const std::optional<float> confA = batchEvalImageConfidence(mode, batch.resultA, filename);
-    const std::optional<float> confB = batchEvalImageConfidence(mode, batch.resultB, filename);
-    const auto passes = [&](float confidence) {
-        return batch.confidenceFilterMode == BatchEvalConfidenceFilterMode::LessThan
-            ? confidence < batch.confidenceFilterThreshold
-            : confidence > batch.confidenceFilterThreshold;
-    };
-    return (confA.has_value() && passes(*confA)) || (confB.has_value() && passes(*confB));
-}
-
-float batchEvalImageSortConfidence(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
-    const std::optional<float> confA = batchEvalImageConfidence(mode, batch.resultA, filename);
-    const std::optional<float> confB = batchEvalImageConfidence(mode, batch.resultB, filename);
-    if (!confA.has_value() && !confB.has_value()) {
-        return 0.0f;
-    }
-    if (!confA.has_value()) {
-        return *confB;
-    }
-    if (!confB.has_value()) {
-        return *confA;
-    }
-    return std::min(*confA, *confB);
-}
-
-bool batchEvalImagePassesDetectionPresenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename) {
-    if (mode != ComparisonTaskMode::Detection ||
-        batch.detectionPresenceFilter == BatchEvalDetectionPresenceFilter::Any) {
-        return true;
-    }
-    const BatchImageResult* imageA = findBatchImage(batch.resultA, filename);
-    const BatchImageResult* imageB = findBatchImage(batch.resultB, filename);
-
-    // A slot with no result for this image (single-model mode leaves slot
-    // B entirely empty) must not participate in either direction of the
-    // filter -- otherwise "no detections" trivially passes every image
-    // whenever the other slot is simply absent.
-    const auto slotPasses = [&](const BatchImageResult* image) -> std::optional<bool> {
-        if (image == nullptr) {
-            return std::nullopt;
-        }
-        const bool hasDetections = !image->detections.empty();
-        return batch.detectionPresenceFilter == BatchEvalDetectionPresenceFilter::HasDetections ? hasDetections
-                                                                                                  : !hasDetections;
-    };
-
-    const std::optional<bool> aPasses = slotPasses(imageA);
-    const std::optional<bool> bPasses = slotPasses(imageB);
-    return (aPasses.has_value() && *aPasses) || (bPasses.has_value() && *bPasses);
-}
-
 void resetModelEvaluationResults(ModelEvaluationState& state) {
     for (auto& liveSlot : state.live.liveSlots) {
         liveSlot.worker.reset();
@@ -735,4 +592,17 @@ void resetModelEvaluationResults(ModelEvaluationState& state) {
     state.batch.classificationMetricsA = ClassificationMetrics{};
     state.batch.classificationMetricsB = ClassificationMetrics{};
     state.batch.selectedImageFilename.reset();
+
+    // Called on taskMode/compareTwoModels changes: drop filter values that
+    // don't exist in the new mode/count.
+    BatchEvalImageFilters& filters = state.batch.filters;
+    filters.confusionCell.reset();
+    if (!state.compareTwoModels) {
+        filters.modelsDisagreeOnly = false;
+    }
+    if (state.taskMode != ComparisonTaskMode::Detection
+        && (filters.errorFilter == BatchEvalErrorFilter::FalsePositives
+            || filters.errorFilter == BatchEvalErrorFilter::Missed)) {
+        filters.errorFilter = BatchEvalErrorFilter::Any;
+    }
 }

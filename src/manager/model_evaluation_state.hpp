@@ -3,6 +3,7 @@
 #include "manager/anomaly_inference.hpp"
 #include "manager/anomaly_worker.hpp"
 #include "manager/app_runtime.hpp"
+#include "manager/batch_eval_filters.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/classification_metrics.hpp"
@@ -142,27 +143,6 @@ enum class BatchEvalRunState {
     Cancelled,
 };
 
-enum class BatchEvalImageSortMode {
-    Filename,
-    ConfidenceAscending,
-    ConfidenceDescending,
-};
-
-enum class BatchEvalConfidenceFilterMode {
-    None,
-    LessThan,
-    GreaterThan,
-};
-
-// Detection mode only -- whether an image produced at least one detected
-// box. Meaningless for classification (a run always produces a top-1
-// prediction unless inference itself failed), so it's ignored there.
-enum class BatchEvalDetectionPresenceFilter {
-    Any,
-    HasDetections,
-    NoDetections,
-};
-
 struct BatchPreviewTexture {
     GLuint previewTexture = 0;
     int previewTextureWidth = 0;
@@ -202,12 +182,9 @@ struct BatchRuntime {
     DetectionMetrics detectionMetricsA, detectionMetricsB;
     ClassificationMetrics classificationMetricsA, classificationMetricsB;
 
-    bool mismatchesOnly = false;
-    std::string imageListFilter;
+    std::string imageListFilter;  // filename search
     BatchEvalImageSortMode imageSortMode = BatchEvalImageSortMode::Filename;
-    BatchEvalConfidenceFilterMode confidenceFilterMode = BatchEvalConfidenceFilterMode::None;
-    float confidenceFilterThreshold = 0.5f;
-    BatchEvalDetectionPresenceFilter detectionPresenceFilter = BatchEvalDetectionPresenceFilter::Any;
+    BatchEvalImageFilters filters;
     std::optional<std::string> selectedImageFilename;
     std::optional<std::string> renderedPreviewFilename;
 
@@ -264,39 +241,6 @@ void startBatchEvaluationRun(
 void updateBatchRuntime(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
     BatchRuntime& batch, const LabelStudioSessionState& session);
-
-// True if the given filename is a "mismatch" for either slot: predicted
-// top-1 != true label (classification), or the image has an unmatched
-// prediction/ground-truth box at IoU >= 0.5 (detection). False if
-// `filename` has no ground truth in either slot's result.
-bool isBatchEvalImageMismatch(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// Representative confidence for `filename` in one slot's result: the
-// classification top-1 probability, or the mean confidence across all
-// detected boxes. std::nullopt if that slot has no result or no
-// prediction/detection for this image.
-std::optional<float> batchEvalImageConfidence(
-    ComparisonTaskMode mode, const BatchEvaluationResult& result, const std::string& filename);
-
-// True if `filename` passes the current confidence filter for either slot
-// (OR, matching isBatchEvalImageMismatch's convention). Always true when
-// batch.confidenceFilterMode == None.
-bool batchEvalImagePassesConfidenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// Sort key for BatchEvalImageSortMode::Confidence{Ascending,Descending}: the
-// lower of the two slots' confidences for `filename` (a slot with no
-// prediction contributes 0.0f, so images missing a prediction sort first
-// ascending / last descending).
-float batchEvalImageSortConfidence(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// True if `filename` passes the current detection-presence filter for
-// either slot (OR, matching isBatchEvalImageMismatch's convention):
-// HasDetections passes if slot A or slot B found at least one box,
-// NoDetections passes if slot A or slot B found none. Always true when
-// mode != Detection or batch.detectionPresenceFilter == Any.
-bool batchEvalImagePassesDetectionPresenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
 
 enum class FilePickerTarget {
     SlotAModel,

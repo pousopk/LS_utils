@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -370,7 +373,7 @@ void drawMetricRow(const char* label, float valueA, float valueB, bool higherIsB
 }
 
 void drawPerClassApTable(const ModelEvaluationState& state) {
-    if (!ImGui::TreeNodeEx("Per-Class AP@0.5", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::TreeNodeEx("Per-Class Metrics @0.5", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
 
@@ -386,37 +389,53 @@ void drawPerClassApTable(const ModelEvaluationState& state) {
         }
     }
 
-    const auto findAp = [](const DetectionMetrics& metrics, const std::string& className) -> std::optional<float> {
+    const auto findClass = [](const DetectionMetrics& metrics, const std::string& className) -> const ClassAveragePrecision* {
         for (const auto& c : metrics.perClass) {
             if (c.className == className) {
-                return c.averagePrecision;
+                return &c;
             }
         }
-        return std::nullopt;
+        return nullptr;
+    };
+    const auto drawValue = [](std::optional<float> value) {
+        ImGui::TableNextColumn();
+        value ? ImGui::Text("%.3f", *value) : ImGui::TextDisabled("--");
+    };
+    const auto drawSlotColumns = [&](const ClassAveragePrecision* c) {
+        drawValue(c ? std::optional<float>(c->averagePrecision) : std::nullopt);
+        drawValue(c ? classPrecision(*c) : std::nullopt);
+        drawValue(c ? classRecall(*c) : std::nullopt);
     };
 
-    const int columns = state.compareTwoModels ? 3 : 2;
+    const int columns = state.compareTwoModels ? 7 : 4;
     if (ImGui::BeginTable("BatchEvalPerClassAP", columns, ImGuiTableFlags_Borders)) {
         ImGui::TableSetupColumn("Class");
-        ImGui::TableSetupColumn(state.compareTwoModels ? "AP@0.5 (A)" : "AP@0.5");
         if (state.compareTwoModels) {
-            ImGui::TableSetupColumn("AP@0.5 (B)");
+            ImGui::TableSetupColumn("AP (A)");
+            ImGui::TableSetupColumn("P (A)");
+            ImGui::TableSetupColumn("R (A)");
+            ImGui::TableSetupColumn("AP (B)");
+            ImGui::TableSetupColumn("P (B)");
+            ImGui::TableSetupColumn("R (B)");
+        } else {
+            ImGui::TableSetupColumn("AP@0.5");
+            ImGui::TableSetupColumn("P");
+            ImGui::TableSetupColumn("R");
         }
         ImGui::TableHeadersRow();
         for (const auto& className : classNames) {
-            const std::optional<float> apA = findAp(state.batch.detectionMetricsA, className);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(className.c_str());
-            ImGui::TableNextColumn();
-            apA ? ImGui::Text("%.3f", *apA) : ImGui::TextDisabled("--");
+            drawSlotColumns(findClass(state.batch.detectionMetricsA, className));
             if (state.compareTwoModels) {
-                const std::optional<float> apB = findAp(state.batch.detectionMetricsB, className);
-                ImGui::TableNextColumn();
-                apB ? ImGui::Text("%.3f", *apB) : ImGui::TextDisabled("--");
+                drawSlotColumns(findClass(state.batch.detectionMetricsB, className));
             }
         }
         ImGui::EndTable();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("P/R are final values at the model's confidence threshold (IoU 0.5).");
     }
     ImGui::TreePop();
 }
@@ -424,7 +443,8 @@ void drawPerClassApTable(const ModelEvaluationState& state) {
 // Drawn inside a fixed-size scrollable child (rather than a collapsible tree
 // node) so Model A's and Model B's matrices can sit side by side and both be
 // visible at once, however many classes either one has.
-void drawConfusionMatrix(const char* label, const ClassificationMetrics& metrics) {
+void drawConfusionMatrix(
+    const char* label, const ClassificationMetrics& metrics, int slotIndex, BatchEvalImageFilters& filters) {
     ImGui::TextUnformatted(label);
     if (metrics.confusionMatrix.empty()) {
         ImGui::TextDisabled("No data.");
@@ -454,12 +474,14 @@ void drawConfusionMatrix(const char* label, const ClassificationMetrics& metrics
             ImGui::TableSetupColumn(predictedLabel.c_str());
         }
         ImGui::TableHeadersRow();
-        for (const auto& trueLabel : labels) {
+        for (size_t row = 0; row < labels.size(); ++row) {
+            const std::string& trueLabel = labels[row];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(trueLabel.c_str());
             const auto trueRow = metrics.confusionMatrix.find(trueLabel);
-            for (const auto& predictedLabel : labels) {
+            for (size_t col = 0; col < labels.size(); ++col) {
+                const std::string& predictedLabel = labels[col];
                 ImGui::TableNextColumn();
                 int count = 0;
                 if (trueRow != metrics.confusionMatrix.end()) {
@@ -470,11 +492,25 @@ void drawConfusionMatrix(const char* label, const ClassificationMetrics& metrics
                 }
                 if (count == 0) {
                     ImGui::TextDisabled("0");
-                } else if (predictedLabel == trueLabel) {
-                    ImGui::TextColored(kGoodColor, "%d", count);
-                } else {
-                    ImGui::TextColored(kBadColor, "%d", count);
+                    continue;
                 }
+                const bool selected = filters.confusionCell && filters.confusionCell->slotIndex == slotIndex
+                    && filters.confusionCell->trueLabel == trueLabel
+                    && filters.confusionCell->predictedLabel == predictedLabel;
+                ImGui::PushID(static_cast<int>(row * labels.size() + col));
+                ImGui::PushStyleColor(ImGuiCol_Text, predictedLabel == trueLabel ? kGoodColor : kBadColor);
+                if (ImGui::Selectable(std::to_string(count).c_str(), selected)) {
+                    if (selected) {
+                        filters.confusionCell.reset();
+                    } else {
+                        filters.confusionCell = BatchEvalConfusionCellFilter{trueLabel, predictedLabel, slotIndex};
+                    }
+                }
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Show images: %s predicted as %s", trueLabel.c_str(), predictedLabel.c_str());
+                }
+                ImGui::PopID();
             }
         }
         ImGui::EndTable();
@@ -540,7 +576,7 @@ void drawAggregateMetricsSingle(ModelEvaluationState& state) {
         if (state.taskMode == ComparisonTaskMode::Detection) {
             drawPerClassApTable(state);
         } else {
-            drawConfusionMatrix("Confusion Matrix", state.batch.classificationMetricsA);
+            drawConfusionMatrix("Confusion Matrix", state.batch.classificationMetricsA, 0, state.batch.filters);
         }
     }
 }
@@ -604,19 +640,60 @@ void drawAggregateMetrics(ModelEvaluationState& state) {
             drawPerClassApTable(state);
         } else {
             ImGui::Columns(2, "BatchEvalConfusionMatrices");
-            drawConfusionMatrix("Model A Confusion Matrix", state.batch.classificationMetricsA);
+            drawConfusionMatrix("Model A Confusion Matrix", state.batch.classificationMetricsA, 0, state.batch.filters);
             ImGui::NextColumn();
-            drawConfusionMatrix("Model B Confusion Matrix", state.batch.classificationMetricsB);
+            drawConfusionMatrix("Model B Confusion Matrix", state.batch.classificationMetricsB, 1, state.batch.filters);
             ImGui::Columns(1);
         }
     }
 }
 
 void drawImageList(ModelEvaluationState& state) {
+    BatchEvalImageFilters& filters = state.batch.filters;
+    const ComparisonTaskMode mode = state.taskMode;
+
     ImGui::BeginChild("BatchEvalImageList", ImVec2(280.0f, 640.0f), true);
-    ImGui::BeginDisabled(!state.batch.hasGroundTruth);
-    ImGui::Checkbox("Mismatches only", &state.batch.mismatchesOnly);
-    ImGui::EndDisabled();
+
+    if (mode != ComparisonTaskMode::Anomaly) {
+        ImGui::BeginDisabled(!state.batch.hasGroundTruth);
+        if (mode == ComparisonTaskMode::Detection) {
+            static const char* kErrorLabels[] = {"Any", "Any error", "False positives", "Missed"};
+            int errorIndex = static_cast<int>(filters.errorFilter);
+            if (ImGui::Combo("Errors", &errorIndex, kErrorLabels, IM_ARRAYSIZE(kErrorLabels))) {
+                filters.errorFilter = static_cast<BatchEvalErrorFilter>(errorIndex);
+            }
+        } else {
+            static const char* kErrorLabels[] = {"Any", "Misclassified"};
+            int errorIndex = filters.errorFilter == BatchEvalErrorFilter::Any ? 0 : 1;
+            if (ImGui::Combo("Errors", &errorIndex, kErrorLabels, IM_ARRAYSIZE(kErrorLabels))) {
+                filters.errorFilter = errorIndex == 0 ? BatchEvalErrorFilter::Any : BatchEvalErrorFilter::AnyError;
+            }
+        }
+        ImGui::EndDisabled();
+
+        const std::vector<std::string> classNames =
+            collectBatchEvalClassNames(mode, state.batch.resultA, state.batch.resultB);
+        if (!filters.classFilter.empty()
+            && std::find(classNames.begin(), classNames.end(), filters.classFilter) == classNames.end()) {
+            filters.classFilter.clear();
+        }
+        if (ImGui::BeginCombo("Class", filters.classFilter.empty() ? "All classes" : filters.classFilter.c_str())) {
+            if (ImGui::Selectable("All classes", filters.classFilter.empty())) {
+                filters.classFilter.clear();
+            }
+            for (const auto& className : classNames) {
+                if (ImGui::Selectable(className.c_str(), filters.classFilter == className)) {
+                    filters.classFilter = className;
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (state.compareTwoModels) {
+            ImGui::Checkbox("Models disagree", &filters.modelsDisagreeOnly);
+        }
+    }
+
     ImGui::InputTextWithHint("##BatchEvalImageFilter", "Search filename...", &state.batch.imageListFilter);
 
     static const char* kSortLabels[] = {"Filename", "Confidence (low first)", "Confidence (high first)"};
@@ -625,61 +702,71 @@ void drawImageList(ModelEvaluationState& state) {
         state.batch.imageSortMode = static_cast<BatchEvalImageSortMode>(sortIndex);
     }
 
-    static const char* kConfidenceFilterLabels[] = {"None", "< threshold", "> threshold"};
-    int confidenceFilterIndex = static_cast<int>(state.batch.confidenceFilterMode);
-    if (ImGui::Combo(
-            "Confidence filter", &confidenceFilterIndex, kConfidenceFilterLabels,
-            IM_ARRAYSIZE(kConfidenceFilterLabels))) {
-        state.batch.confidenceFilterMode = static_cast<BatchEvalConfidenceFilterMode>(confidenceFilterIndex);
-    }
-    ImGui::BeginDisabled(state.batch.confidenceFilterMode == BatchEvalConfidenceFilterMode::None);
-    ImGui::SliderFloat("Threshold", &state.batch.confidenceFilterThreshold, 0.0f, 1.0f, "%.2f");
-    ImGui::EndDisabled();
-
-    if (state.taskMode == ComparisonTaskMode::Detection) {
-        static const char* kDetectionPresenceLabels[] = {"Any", "Has detections", "No detections"};
-        int detectionPresenceIndex = static_cast<int>(state.batch.detectionPresenceFilter);
-        if (ImGui::Combo(
-                "Detections", &detectionPresenceIndex, kDetectionPresenceLabels,
-                IM_ARRAYSIZE(kDetectionPresenceLabels))) {
-            state.batch.detectionPresenceFilter =
-                static_cast<BatchEvalDetectionPresenceFilter>(detectionPresenceIndex);
+    if (mode == ComparisonTaskMode::Detection) {
+        static const char* kBasisLabels[] = {"Mean", "Lowest box", "Highest box"};
+        int basisIndex = static_cast<int>(filters.confidenceBasis);
+        if (ImGui::Combo("Conf. basis", &basisIndex, kBasisLabels, IM_ARRAYSIZE(kBasisLabels))) {
+            filters.confidenceBasis = static_cast<BatchEvalConfidenceBasis>(basisIndex);
         }
     }
 
-    std::vector<std::string> filenames;
+    static const char* kConfidenceFilterLabels[] = {"None", "< threshold", "> threshold"};
+    int confidenceFilterIndex = static_cast<int>(filters.confidenceFilterMode);
+    if (ImGui::Combo(
+            "Confidence filter", &confidenceFilterIndex, kConfidenceFilterLabels,
+            IM_ARRAYSIZE(kConfidenceFilterLabels))) {
+        filters.confidenceFilterMode = static_cast<BatchEvalConfidenceFilterMode>(confidenceFilterIndex);
+    }
+    ImGui::BeginDisabled(filters.confidenceFilterMode == BatchEvalConfidenceFilterMode::None);
+    ImGui::SliderFloat("Threshold", &filters.confidenceFilterThreshold, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+
+    if (mode == ComparisonTaskMode::Detection) {
+        static const char* kDetectionPresenceLabels[] = {"Any", "Has detections", "No detections"};
+        int detectionPresenceIndex = static_cast<int>(filters.detectionPresenceFilter);
+        if (ImGui::Combo(
+                "Detections", &detectionPresenceIndex, kDetectionPresenceLabels,
+                IM_ARRAYSIZE(kDetectionPresenceLabels))) {
+            filters.detectionPresenceFilter = static_cast<BatchEvalDetectionPresenceFilter>(detectionPresenceIndex);
+        }
+    }
+
+    // (filename, sort key) -- the key is computed once per image rather
+    // than inside the sort comparator.
+    std::vector<std::pair<std::string, float>> entries;
     for (const auto& image : state.batch.resultA.images) {
         if (!fileNameMatchesFilter(std::filesystem::path(image.imageFilename), state.batch.imageListFilter)) {
             continue;
         }
-        if (state.batch.mismatchesOnly && state.batch.hasGroundTruth &&
-            !isBatchEvalImageMismatch(state.taskMode, state.batch, image.imageFilename)) {
+        const BatchImageResult* imageB = findBatchImage(state.batch.resultB, image.imageFilename);
+        if (!batchEvalImagePassesFilters(mode, state.batch.hasGroundTruth, &image, imageB, filters)) {
             continue;
         }
-        if (!batchEvalImagePassesConfidenceFilter(state.taskMode, state.batch, image.imageFilename)) {
-            continue;
-        }
-        if (!batchEvalImagePassesDetectionPresenceFilter(state.taskMode, state.batch, image.imageFilename)) {
-            continue;
-        }
-        filenames.push_back(image.imageFilename);
+        entries.emplace_back(
+            image.imageFilename, batchEvalImageSortConfidence(mode, &image, imageB, filters.confidenceBasis));
     }
 
     if (state.batch.imageSortMode == BatchEvalImageSortMode::ConfidenceAscending) {
-        std::sort(filenames.begin(), filenames.end(), [&state](const std::string& a, const std::string& b) {
-            return batchEvalImageSortConfidence(state.taskMode, state.batch, a) <
-                batchEvalImageSortConfidence(state.taskMode, state.batch, b);
-        });
+        std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
     } else if (state.batch.imageSortMode == BatchEvalImageSortMode::ConfidenceDescending) {
-        std::sort(filenames.begin(), filenames.end(), [&state](const std::string& a, const std::string& b) {
-            return batchEvalImageSortConfidence(state.taskMode, state.batch, a) >
-                batchEvalImageSortConfidence(state.taskMode, state.batch, b);
-        });
+        std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    }
+
+    if (filters.confusionCell) {
+        const char* slotName =
+            filters.confusionCell->slotIndex == 0 ? (state.compareTwoModels ? "Model A" : "Model") : "Model B";
+        ImGui::TextWrapped(
+            "Cell: %s -> %s (%s)", filters.confusionCell->trueLabel.c_str(),
+            filters.confusionCell->predictedLabel.c_str(), slotName);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("x##ClearConfusionCell")) {
+            filters.confusionCell.reset();
+        }
     }
 
     ImGui::Separator();
     ImGui::BeginChild("BatchEvalImageListScroll", ImVec2(0, 0), false);
-    for (const auto& filename : filenames) {
+    for (const auto& [filename, sortKey] : entries) {
         const bool selected = state.batch.selectedImageFilename && *state.batch.selectedImageFilename == filename;
         if (ImGui::Selectable(filename.c_str(), selected)) {
             state.batch.selectedImageFilename = filename;
@@ -687,15 +774,6 @@ void drawImageList(ModelEvaluationState& state) {
     }
     ImGui::EndChild();
     ImGui::EndChild();
-}
-
-const BatchImageResult* findBatchImage(const BatchEvaluationResult& result, const std::string& filename) {
-    for (const auto& image : result.images) {
-        if (image.imageFilename == filename) {
-            return &image;
-        }
-    }
-    return nullptr;
 }
 
 void drawGroundTruthLine(ComparisonTaskMode mode, const BatchImageResult* image) {
