@@ -1,7 +1,7 @@
 #include "widgets/label_studio_window.hpp"
 
 #include "manager/labeling_state.hpp"
-#include "widgets/AppUi.hpp"
+#include "widgets/ml_app_ui.hpp"
 #include "widgets/dataset_browser_window.hpp"
 #include "widgets/date_picker.hpp"
 #include "widgets/label_assistant_window.hpp"
@@ -132,7 +132,7 @@ void drawConnectionTabContent(LabelStudioSessionState& session, SharedLabelStudi
 
 } // namespace
 
-void drawLabelStudioWindow(AppUi& ui) {
+void drawLabelStudioWindow(MlAppUi& ui) {
     bool windowOpen = ui.showLabelStudioWindow;
     if (!windowOpen) {
         return;

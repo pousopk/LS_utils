@@ -5,16 +5,16 @@
 
 #include <functional>
 
-struct AppUi;
+struct MlAppUi;
 
 // The merged Label Studio window: one Begin/End wrapping a tab bar with
 // Connection/Labeling/Label Assistant/Find by Timestamp tabs (formerly four
-// separate top-level windows). Takes AppUi& directly -- like
+// separate top-level windows). Takes MlAppUi& directly -- like
 // drawConnectionSidebar, this widget's whole job is coordinating several of
-// AppUi's own states (labelStudioSession, labelingState, labelAssistantState,
+// MlAppUi's own states (labelStudioSession, labelingState, labelAssistantState,
 // timestampSearchState, pendingLabelStudioTab), so that coupling is
 // intrinsic rather than something to hide behind narrower parameters.
-void drawLabelStudioWindow(AppUi& ui);
+void drawLabelStudioWindow(MlAppUi& ui);
 
 // Read-only summary shown by every LS-consuming tab/window in place of its
 // own connection-field inputs: "Connected: <project>" with a button to
