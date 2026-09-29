@@ -1,8 +1,11 @@
 #include "widgets/label_assistant_window.hpp"
 
-#include "manager/app_runtime.hpp"
-#include "widgets/file_browser_utils.hpp"
+#include "ui_common/image_fit.hpp"
+#include "manager/label_studio_client.hpp"
+#include "ui_common/file_browser_utils.hpp"
+#include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -56,17 +59,6 @@ void drawSourceModeToggle(LabelAssistantState& state) {
     }
 }
 
-// Shared by the "Label Studio Project" source setup (needed before Run)
-// and the export section (needed before Push, LocalFolder mode only).
-void drawLabelStudioConnectionFields(LabelAssistantState& state) {
-    ImGui::InputText("Label Studio URL", &state.labelStudioBaseUrl);
-    ImGui::InputInt("Project ID", &state.labelStudioProjectId);
-    ImGui::InputText("API Token", &state.labelStudioApiToken, ImGuiInputTextFlags_Password);
-    if (!state.labelStudioAutoFetchStatus.empty()) {
-        ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
-    }
-}
-
 void drawModelConfig(LabelAssistantState& state) {
     float* confThreshold =
         (state.taskMode == ComparisonTaskMode::Detection) ? &state.modelConfig.confThreshold : nullptr;
@@ -75,8 +67,8 @@ void drawModelConfig(LabelAssistantState& state) {
 
     const bool loadClicked = drawModelSlotConfigFields(
         state.modelConfig.onnxPath, state.modelConfig.classNamesPath, state.modelConfig.inputWidth,
-        state.modelConfig.inputHeight, confThreshold, nmsThreshold, state.modelConfig.autoDetectStatus,
-        state.modelConfig.loadError,
+        state.modelConfig.inputHeight, confThreshold, nmsThreshold, &state.modelConfig.isObbDetectionModel,
+        state.modelConfig.autoDetectStatus, state.modelConfig.loadError,
         [&state]() {
             state.filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
             state.filePickerOpen = true;
@@ -104,7 +96,8 @@ void drawFolderPicker(LabelAssistantState& state) {
     }
 }
 
-void drawRunBar(LabelAssistantState& state) {
+void drawRunBar(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     ImGui::Separator();
     if (state.runState == LabelAssistantRunState::Running) {
         if (!state.lastProgress.phaseLabel.empty()) {
@@ -133,18 +126,21 @@ void drawRunBar(LabelAssistantState& state) {
         : state.modelConfig.classificationModel != nullptr;
     const bool sourceReady = state.sourceMode == LabelAssistantSourceMode::LocalFolder
         ? !state.imageFolderPath.empty()
-        : !state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0 && !state.labelStudioApiToken.empty();
+        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty() && sharedData.loaded;
     const bool canRun = modelLoaded && sourceReady;
+    if (state.sourceMode == LabelAssistantSourceMode::LabelStudioProject) {
+        drawSharedTaskRangeNote(sharedData);
+    }
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
-        startLabelAssistantRun(state);
+        startLabelAssistantRun(state, session, sharedData);
     }
     ImGui::EndDisabled();
     if (!canRun) {
         ImGui::TextDisabled(
             state.sourceMode == LabelAssistantSourceMode::LocalFolder
                 ? "Load a model matching the selected mode and pick an image folder to run."
-                : "Load a model matching the selected mode and fill in the Label Studio connection to run.");
+                : "Load a model matching the selected mode and wait for the task list to load to run.");
     }
 }
 
@@ -188,7 +184,8 @@ std::vector<LabelAssistantImageEntry> buildImageEntries(const LabelAssistantStat
     return entries;
 }
 
-void drawImageList(LabelAssistantState& state) {
+void drawImageList(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask) {
     ImGui::BeginChild("LabelAssistantImageList", ImVec2(320.0f, 380.0f), true);
     ImGui::InputTextWithHint("##LabelAssistantImageFilter", "Search filename...", &state.imageListFilter);
 
@@ -248,6 +245,13 @@ void drawImageList(LabelAssistantState& state) {
         if (ImGui::Selectable(label.c_str(), selected)) {
             state.selectedImageFilename = entry->filename;
         }
+        const auto taskId = parseTaskIdFromFilename(entry->filename);
+        if (taskId.has_value()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(("Label##" + entry->filename).c_str())) {
+                onLabelTask(*taskId);
+            }
+        }
     }
     ImGui::EndChild();
     ImGui::EndChild();
@@ -264,8 +268,10 @@ void drawSelectedImageDetail(LabelAssistantState& state) {
     }
 
     if (state.previewTexture != 0 && state.previewTextureWidth > 0 && state.previewTextureHeight > 0) {
-        const ImVec2 size = fitImageToRegion(state.previewTextureWidth, state.previewTextureHeight, 500.0f, 300.0f);
+        const float maxWidth = ImGui::GetContentRegionAvail().x;
+        const ImVec2 size = fitImageToRegion(state.previewTextureWidth, state.previewTextureHeight, maxWidth, 300.0f);
         ImGui::Image((void*)(intptr_t)state.previewTexture, size);
+        drawHoverEnlargedImage(state.previewTexture, state.previewTextureWidth, state.previewTextureHeight, size);
     } else {
         ImGui::TextDisabled("No preview.");
     }
@@ -294,15 +300,17 @@ void drawSelectedImageDetail(LabelAssistantState& state) {
     ImGui::EndChild();
 }
 
-void drawExportSection(LabelAssistantState& state) {
+void drawExportSection(
+    LabelAssistantState& state, const LabelStudioSessionState& session,
+    const std::function<void()>& onOpenLabelStudioWindow) {
     ImGui::Separator();
     const bool isLocalFolder = state.sourceMode == LabelAssistantSourceMode::LocalFolder;
     ImGui::TextUnformatted(isLocalFolder ? "Push to Label Studio" : "Attach Predictions to Label Studio");
 
-    // In LabelStudioProject mode the connection fields are already shown
-    // (and required) above the Run bar -- no need to repeat them here.
+    // In LabelStudioProject mode the shared session summary is already
+    // shown above the Run bar -- no need to repeat it here.
     if (isLocalFolder) {
-        drawLabelStudioConnectionFields(state);
+        drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
     }
 
     ImGui::InputText(
@@ -315,14 +323,30 @@ void drawExportSection(LabelAssistantState& state) {
         ImGui::Checkbox("Include images with no detections", &state.includeZeroDetectionImages);
     }
 
+    if (state.pushState == LabelAssistantPushState::Running) {
+        ImGui::Text("%d / %d", state.lastPushProgress.completed, state.lastPushProgress.total);
+        const float fraction = state.lastPushProgress.total > 0
+            ? static_cast<float>(state.lastPushProgress.completed) / static_cast<float>(state.lastPushProgress.total)
+            : 0.0f;
+        ImGui::ProgressBar(fraction);
+        if (ImGui::Button("Cancel")) {
+            state.pushWorker.requestCancel();
+        }
+        return;
+    }
+
+    if (state.pushState == LabelAssistantPushState::Cancelled) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Push cancelled.");
+    }
+
     const bool hasDrafts = state.taskMode == ComparisonTaskMode::Classification
         ? !state.result.classificationDrafts.empty()
         : !state.result.detectionDrafts.empty();
-    const bool canPush = hasDrafts && !state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0
-        && !state.labelStudioApiToken.empty();
+    const bool canPush = hasDrafts && !session.baseUrl.empty() && session.activeProjectId > 0
+        && !session.apiToken.empty();
     ImGui::BeginDisabled(!canPush);
     if (ImGui::Button(isLocalFolder ? "Push to Label Studio" : "Attach Predictions to Label Studio")) {
-        pushLabelAssistantDraftsToLabelStudio(state);
+        pushLabelAssistantDraftsToLabelStudio(state, session);
     }
     ImGui::EndDisabled();
     if (!state.exportStatus.empty()) {
@@ -411,17 +435,9 @@ void drawFilePickerPopup(LabelAssistantState& state) {
 
 } // namespace
 
-void drawLabelAssistantWindow(bool* show, LabelAssistantState& state) {
-    if (!*show) {
-        return;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(1100.0f, 900.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Label Assistant", show)) {
-        ImGui::End();
-        return;
-    }
-
+void drawLabelAssistantTabContent(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
+    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
     drawTaskModeToggle(state);
     ImGui::Separator();
 
@@ -432,11 +448,14 @@ void drawLabelAssistantWindow(bool* show, LabelAssistantState& state) {
     if (state.sourceMode == LabelAssistantSourceMode::LocalFolder) {
         drawFolderPicker(state);
     } else {
-        drawLabelStudioConnectionFields(state);
+        drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
+        if (!state.labelStudioAutoFetchStatus.empty()) {
+            ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
+        }
     }
     ImGui::Separator();
 
-    drawRunBar(state);
+    drawRunBar(state, session, sharedData);
 
     if (state.runState == LabelAssistantRunState::Complete) {
         ImGui::Separator();
@@ -445,13 +464,11 @@ void drawLabelAssistantWindow(bool* show, LabelAssistantState& state) {
         } else {
             drawResultsSummary(state);
             ImGui::Separator();
-            drawImageList(state);
+            drawImageList(state, session, onLabelTask);
             drawSelectedImageDetail(state);
-            drawExportSection(state);
+            drawExportSection(state, session, onOpenLabelStudioWindow);
         }
     }
-
-    ImGui::End();
 
     drawFolderPickerPopup(state);
     drawFilePickerPopup(state);

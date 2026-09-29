@@ -1,4 +1,7 @@
 #include "manager/label_studio_client.hpp"
+#include "manager/label_studio_dataset_browser.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -167,6 +170,770 @@ void test_matchTasksToTimestamps_emptyQueriesReturnsEmpty() {
     CHECK(matchTasksToTimestamps(tasks, "image", {}).empty());
 }
 
+void test_parseLabelStudioProjectConfigXml_singleRectangleLabelsTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<RectangleLabels name="label" toName="image">)"
+        R"(<Label value="Person"/><Label value="Car"/></RectangleLabels></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.dataImageKey == "image");
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::RectangleLabels);
+    CHECK(config.controlTags[0].name == "label");
+    CHECK(config.controlTags[0].toName == "image");
+    CHECK(config.controlTags[0].labels.size() == 2);
+    CHECK(config.controlTags[0].labels[0] == "Person");
+    CHECK(config.controlTags[0].labels[1] == "Car");
+}
+
+void test_parseLabelStudioProjectConfigXml_choicesTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$photo"/>)"
+        R"(<Choices name="class" toName="image">)"
+        R"(<Choice value="Good"/><Choice value="Defect"/></Choices></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.dataImageKey == "photo"); // leading '$' stripped
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::Choices);
+    CHECK(config.controlTags[0].labels.size() == 2);
+    CHECK(config.controlTags[0].labels[1] == "Defect");
+}
+
+void test_parseLabelStudioProjectConfigXml_bothTagsPresent() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<RectangleLabels name="label" toName="image"><Label value="Person"/></RectangleLabels>)"
+        R"(<Choices name="class" toName="image"><Choice value="Good"/></Choices></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.controlTags.size() == 2);
+}
+
+void test_parseLabelStudioProjectConfigXml_noImageTagIsError() {
+    const auto config = parseLabelStudioProjectConfigXml(R"(<View><RectangleLabels name="label" toName="image"/></View>)");
+    CHECK(!config.error.empty());
+}
+
+void test_parseLabelStudioProjectConfigXml_malformedXmlIsError() {
+    const auto config = parseLabelStudioProjectConfigXml("<View><Unclosed>");
+    CHECK(!config.error.empty());
+}
+
+void test_parseLabelStudioProjectConfigXml_brushLabelsTag() {
+    const std::string xml =
+        R"(<View><Image name="image" value="$image"/>)"
+        R"(<BrushLabels name="brush" toName="image">)"
+        R"(<Label value="Defect"/><Label value="Scratch"/></BrushLabels></View>)";
+
+    const auto config = parseLabelStudioProjectConfigXml(xml);
+    CHECK(config.error.empty());
+    CHECK(config.controlTags.size() == 1);
+    CHECK(config.controlTags[0].type == LabelStudioControlTagType::BrushLabels);
+    CHECK(config.controlTags[0].labels.size() == 2);
+}
+
+void test_selectAllTaskSummaries_flagsAnnotationsAndPredictions() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a/1.jpg"}, "total_annotations": 1, "total_predictions": 0},
+        {"id": 2, "data": {"image": "/a/2.jpg"}, "total_annotations": 0, "total_predictions": 2},
+        {"id": 3, "data": {"image": "/a/3.jpg"}, "total_annotations": 0, "total_predictions": 0}
+    ])");
+
+    const auto summaries = selectAllTaskSummaries(tasks, "image");
+    CHECK(summaries.size() == 3);
+    CHECK(summaries[0].taskId == 1);
+    CHECK(summaries[0].hasAnnotation == true);
+    CHECK(summaries[0].hasPrediction == false);
+    CHECK(summaries[1].hasAnnotation == false);
+    CHECK(summaries[1].hasPrediction == true);
+    CHECK(summaries[2].hasAnnotation == false);
+    CHECK(summaries[2].hasPrediction == false);
+}
+
+void test_selectAllTaskSummaries_fallsBackToArrayLengths() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a/1.jpg"}, "annotations": [{}], "predictions": []}
+    ])");
+    const auto summaries = selectAllTaskSummaries(tasks, "image");
+    CHECK(summaries.size() == 1);
+    CHECK(summaries[0].hasAnnotation == true);
+    CHECK(summaries[0].hasPrediction == false);
+}
+
+void test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey() {
+    const auto tasks = nlohmann::json::parse(R"([
+        {"data": {"image": "/a/1.jpg"}},
+        {"id": 2, "data": {}}
+    ])");
+    CHECK(selectAllTaskSummaries(tasks, "image").empty());
+}
+
+void test_parseLabelStudioProjects_bareArray() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "title": "Detection Project"},
+        {"id": 2, "title": "Classification Project"}
+    ])");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 2);
+    CHECK(projects[0].id == 1);
+    CHECK(projects[0].title == "Detection Project");
+    CHECK(projects[1].id == 2);
+    CHECK(projects[1].title == "Classification Project");
+}
+
+void test_parseLabelStudioProjects_wrappedInResults() {
+    const auto json = nlohmann::json::parse(R"({
+        "count": 1,
+        "next": null,
+        "results": [{"id": 7, "title": "Wrapped Project"}]
+    })");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 1);
+    CHECK(projects[0].id == 7);
+    CHECK(projects[0].title == "Wrapped Project");
+}
+
+void test_parseLabelStudioProjects_skipsEntriesMissingIdOrTitle() {
+    const auto json = nlohmann::json::parse(R"([
+        {"id": 1, "title": "Has Both"},
+        {"title": "Missing Id"},
+        {"id": 2},
+        {"id": 3, "title": "Has Both Too"}
+    ])");
+    const auto projects = parseLabelStudioProjects(json);
+    CHECK(projects.size() == 2);
+    CHECK(projects[0].id == 1);
+    CHECK(projects[1].id == 3);
+}
+
+void test_parseLabelStudioProjects_notAnArrayReturnsEmpty() {
+    const auto json = nlohmann::json::parse(R"({"detail": "not found"})");
+    CHECK(parseLabelStudioProjects(json).empty());
+}
+
+// Label Studio's native /api/tasks/ response has no "next" key at all
+// (unlike the DRF-paginated /api/projects/ response). A full page there
+// must still be treated as "there may be more" -- this is the exact
+// shape of the bug where task downloads silently stopped at 200 tasks.
+void test_shouldFetchNextLabelStudioPage_nativeShapeFullPageContinues() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 500
+    })");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_nativeShapeShortPageStops() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 150
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/150, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_nativeShapeEmptyPageStops() {
+    const auto page = nlohmann::json::parse(R"({
+        "tasks": [],
+        "total": 0
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/0, /*pageSize=*/200));
+}
+
+// DRF-paginated shape (e.g. /api/projects/) always has a "next" key, and
+// it's authoritative -- even on a full page, an explicit "next": null
+// means stop.
+void test_shouldFetchNextLabelStudioPage_drfShapeNullNextStopsEvenOnFullPage() {
+    const auto page = nlohmann::json::parse(R"({
+        "count": 200,
+        "next": null,
+        "results": []
+    })");
+    CHECK(!shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_drfShapeNonNullNextContinues() {
+    const auto page = nlohmann::json::parse(R"({
+        "count": 250,
+        "next": "https://example.com/api/projects/?page=2",
+        "results": []
+    })");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/200, /*pageSize=*/200));
+}
+
+void test_shouldFetchNextLabelStudioPage_bareArrayFullPageContinues() {
+    const auto page = nlohmann::json::parse(R"([1, 2, 3])");
+    CHECK(shouldFetchNextLabelStudioPage(page, /*pageItemCount=*/3, /*pageSize=*/3));
+}
+
+// countLabelStudioTasks backs pushDraftsAsNewLabelStudioTasks's guard
+// against another actor creating/removing tasks in the project while
+// this app's own upload loop is running (see selectMostRecentTaskIds).
+void test_countLabelStudioTasks_bareArray() {
+    const auto json = nlohmann::json::parse(R"([{"id": 1}, {"id": 2}, {"id": 3}])");
+    CHECK(countLabelStudioTasks(json) == 3);
+}
+
+void test_countLabelStudioTasks_wrappedInTasks() {
+    const auto json = nlohmann::json::parse(R"({"tasks": [{"id": 1}, {"id": 2}], "total": 2})");
+    CHECK(countLabelStudioTasks(json) == 2);
+}
+
+void test_countLabelStudioTasks_emptyArrayIsZero() {
+    const auto json = nlohmann::json::parse(R"([])");
+    CHECK(countLabelStudioTasks(json) == 0);
+}
+
+void test_countLabelStudioTasks_notAnArrayOrTasksObjectIsZero() {
+    const auto json = nlohmann::json::parse(R"({"detail": "not found"})");
+    CHECK(countLabelStudioTasks(json) == 0);
+}
+
+void test_parseLabelStudioTaskDetail_withAnnotationAndPrediction() {
+    const auto task = nlohmann::json::parse(R"({
+        "id": 5,
+        "data": {"image": "/data/upload/1/x.png"},
+        "annotations": [{"id": 42, "result": [{"type": "choices", "value": {"choices": ["Good"]}}]}],
+        "predictions": [{"result": [{"type": "choices", "value": {"choices": ["Defect"]}}]}]
+    })");
+
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(detail.error.empty());
+    CHECK(detail.taskId == 5);
+    CHECK(detail.imagePath == "/data/upload/1/x.png");
+    CHECK(detail.annotationId.has_value());
+    CHECK(*detail.annotationId == 42);
+    CHECK(detail.annotationResult.size() == 1);
+    CHECK(detail.predictionResult.size() == 1);
+}
+
+void test_parseLabelStudioTaskDetail_noAnnotationOrPrediction() {
+    const auto task = nlohmann::json::parse(R"({"id": 6, "data": {"image": "/a/6.jpg"}, "annotations": [], "predictions": []})");
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(detail.error.empty());
+    CHECK(!detail.annotationId.has_value());
+    CHECK(detail.annotationResult.empty());
+    CHECK(detail.predictionResult.empty());
+}
+
+void test_parseLabelStudioTaskDetail_missingImageKeyIsError() {
+    const auto task = nlohmann::json::parse(R"({"id": 7, "data": {}})");
+    const auto detail = parseLabelStudioTaskDetail(task, "image");
+    CHECK(!detail.error.empty());
+}
+
+void test_parseDetectionResultBoxes_convertsPercentToPixels() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "label", "to_name": "image",
+         "original_width": 200, "original_height": 100,
+         "value": {"x": 10.0, "y": 20.0, "width": 50.0, "height": 25.0, "rectanglelabels": ["Person"]}}
+    ])");
+
+    const auto boxes = parseDetectionResultBoxes(result, "label");
+    CHECK(boxes.size() == 1);
+    CHECK(boxes[0].box.x == 20);      // 10% of 200
+    CHECK(boxes[0].box.y == 20);      // 20% of 100
+    CHECK(boxes[0].box.width == 100); // 50% of 200
+    CHECK(boxes[0].box.height == 25); // 25% of 100
+    CHECK(boxes[0].className == "Person");
+    CHECK(boxes[0].rotationDegrees == 0.0f); // absent in the JSON -- defaults to unrotated
+}
+
+void test_parseDetectionResultBoxes_filtersByFromNameAndType() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "otherLabel", "to_name": "image",
+         "original_width": 100, "original_height": 100,
+         "value": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "rectanglelabels": ["Car"]}},
+        {"type": "choices", "from_name": "label", "to_name": "image", "value": {"choices": ["Good"]}}
+    ])");
+    CHECK(parseDetectionResultBoxes(result, "label").empty());
+}
+
+void test_parseDetectionResultBoxes_preservesRotation() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "rectanglelabels", "from_name": "label", "to_name": "image",
+         "original_width": 100, "original_height": 100,
+         "value": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "rotation": 15.0, "rectanglelabels": ["Car"]}}
+    ])");
+    const auto boxes = parseDetectionResultBoxes(result, "label");
+    CHECK(boxes.size() == 1);
+    CHECK(boxes[0].rotationDegrees == 15.0f);
+}
+
+void test_parseLabelStudioExport_preservesRotation() {
+    // Real schema, verified against Label Studio's own docs.
+    const auto tasks = nlohmann::json::parse(R"([{
+        "data": {"image": "http://x/opensource/label-studio/1.jpg"},
+        "annotations": [{"result": [{
+            "type": "rectanglelabels",
+            "value": {"x": 50.8, "y": 5.87, "width": 12.4, "height": 10.46, "rotation": 45.0, "rectanglelabels": ["Moonwalker"]},
+            "original_width": 600, "original_height": 403
+        }]}]
+    }])");
+
+    const auto result = parseLabelStudioExport(tasks);
+    CHECK(result.error.empty());
+    CHECK(result.images.size() == 1);
+    CHECK(result.images[0].boxes.size() == 1);
+    CHECK(result.images[0].boxes[0].rotationDegrees == 45.0f);
+}
+
+void test_buildDetectionPredictionResult_writesRotation() {
+    DraftDetectionLabel draft;
+    draft.imageFilename = "1.jpg";
+    draft.imageWidth = 200;
+    draft.imageHeight = 100;
+    DraftDetectionBox box;
+    box.box = cv::Rect(20, 20, 100, 25);
+    box.className = "Person";
+    box.confidence = 0.9f;
+    box.rotationDegrees = 30.0f;
+    draft.boxes.push_back(box);
+
+    const auto prediction = buildDetectionPredictionResult(draft, "label", "image");
+    CHECK(prediction.result.size() == 1);
+    CHECK(prediction.result[0]["value"]["rotation"].get<double>() == 30.0);
+}
+
+void test_buildDetectionPredictionResult_defaultsRotationToZero() {
+    DraftDetectionLabel draft;
+    draft.imageWidth = 200;
+    draft.imageHeight = 100;
+    DraftDetectionBox box;
+    box.box = cv::Rect(0, 0, 10, 10);
+    box.className = "Car";
+    draft.boxes.push_back(box);
+
+    const auto prediction = buildDetectionPredictionResult(draft, "label", "image");
+    CHECK(prediction.result.size() == 1);
+    CHECK(prediction.result[0]["value"]["rotation"].get<double>() == 0.0);
+}
+
+void test_parseChoiceResultLabel_findsMatchingChoice() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "choices", "from_name": "class", "to_name": "image", "value": {"choices": ["Defect"]}}
+    ])");
+    const auto label = parseChoiceResultLabel(result, "class");
+    CHECK(label.has_value());
+    CHECK(*label == "Defect");
+}
+
+void test_parseChoiceResultLabel_noMatchReturnsNullopt() {
+    const auto result = nlohmann::json::parse(R"([{"type": "rectanglelabels", "from_name": "label"}])");
+    CHECK(!parseChoiceResultLabel(result, "class").has_value());
+}
+
+void test_parseChoiceResultLabel_emptyResultReturnsNullopt() {
+    CHECK(!parseChoiceResultLabel(nlohmann::json::array(), "class").has_value());
+}
+
+cv::Mat maskFromRows(const std::vector<std::vector<int>>& rows) {
+    const int height = static_cast<int>(rows.size());
+    const int width = static_cast<int>(rows[0].size());
+    cv::Mat mask(height, width, CV_8UC1);
+    for (int r = 0; r < height; ++r) {
+        for (int c = 0; c < width; ++c) {
+            mask.at<uint8_t>(r, c) = static_cast<uint8_t>(rows[r][c]);
+        }
+    }
+    return mask;
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2AllZero() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 0}, {0, 0}}));
+    const std::vector<int> expected = {0, 0, 0, 16, 57, 27, 253, 240, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2All255() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{255, 255}, {255, 255}}));
+    const std::vector<int> expected = {0, 0, 0, 16, 57, 27, 253, 255, 240};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x3OnePixel() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 0, 0}, {0, 255, 0}}));
+    const std::vector<int> expected = {0, 0, 0, 24, 57, 27, 253, 240, 8, 255, 227, 0, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x20LongRun() {
+    std::vector<int> row(20, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 80, 57, 27, 254, 79, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x9Run() {
+    std::vector<int> row(9, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 36, 57, 27, 254, 35, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x17Run() {
+    std::vector<int> row(17, 255);
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({row}));
+    const std::vector<int> expected = {0, 0, 0, 68, 57, 27, 254, 67, 255, 0};
+    CHECK(rle == expected);
+}
+
+void test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x6Alternating() {
+    const auto rle = encodeMaskToLabelStudioRle(maskFromRows({{0, 255, 0, 255, 0, 255}}));
+    const std::vector<int> expected = {0, 0, 0, 24, 57, 27, 252, 96, 17, 255, 198, 1, 31, 252, 96, 17, 255, 128};
+    CHECK(rle == expected);
+}
+
+void test_rleRoundTrip_preserves2DShape() {
+    // 3 rows x 4 cols, distinct per-row pattern -- catches a row/col transposition bug.
+    const auto mask = maskFromRows({{0, 255, 0, 255}, {255, 255, 0, 0}, {0, 0, 0, 255}});
+    const auto rle = encodeMaskToLabelStudioRle(mask);
+    const auto decoded = decodeLabelStudioRleToMask(rle, 4, 3);
+    CHECK(decoded.rows == 3);
+    CHECK(decoded.cols == 4);
+    bool allMatch = true;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            if (decoded.at<uint8_t>(r, c) != mask.at<uint8_t>(r, c)) {
+                allMatch = false;
+            }
+        }
+    }
+    CHECK(allMatch);
+}
+
+void test_rleRoundTrip_runLengthBoundary_8vs9() {
+    std::vector<int> row8(8, 255);
+    std::vector<int> row9(9, 255);
+    const auto mask8 = maskFromRows({row8});
+    const auto mask9 = maskFromRows({row9});
+    const auto decoded8 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(mask8), 8, 1);
+    const auto decoded9 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(mask9), 9, 1);
+    bool match8 = true;
+    for (int c = 0; c < 8; ++c) {
+        if (decoded8.at<uint8_t>(0, c) != 255) match8 = false;
+    }
+    bool match9 = true;
+    for (int c = 0; c < 9; ++c) {
+        if (decoded9.at<uint8_t>(0, c) != 255) match9 = false;
+    }
+    CHECK(match8);
+    CHECK(match9);
+}
+
+void test_rleRoundTrip_runLengthBoundary_256vs257() {
+    std::vector<int> row256(256, 255);
+    std::vector<int> row257(257, 255);
+    const auto decoded256 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(maskFromRows({row256})), 256, 1);
+    const auto decoded257 = decodeLabelStudioRleToMask(encodeMaskToLabelStudioRle(maskFromRows({row257})), 257, 1);
+    bool match256 = true;
+    for (int c = 0; c < 256; ++c) {
+        if (decoded256.at<uint8_t>(0, c) != 255) match256 = false;
+    }
+    bool match257 = true;
+    for (int c = 0; c < 257; ++c) {
+        if (decoded257.at<uint8_t>(0, c) != 255) match257 = false;
+    }
+    CHECK(match256);
+    CHECK(match257);
+}
+
+void test_rleRoundTrip_runLongerThan65536Chunks() {
+    // 70000 identical pixels in one row forces the encoder's chunking path
+    // (runs >65536 are split into multiple 16-bit-length-field runs).
+    std::vector<int> row(70000, 255);
+    const auto mask = maskFromRows({row});
+    const auto rle = encodeMaskToLabelStudioRle(mask);
+    const auto decoded = decodeLabelStudioRleToMask(rle, 70000, 1);
+    bool allMatch = true;
+    for (int c = 0; c < 70000; ++c) {
+        if (decoded.at<uint8_t>(0, c) != 255) allMatch = false;
+    }
+    CHECK(allMatch);
+}
+
+void test_buildBrushLabelResult_oneItemPerRegion() {
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region1;
+    region1.mask = maskFromRows({{0, 255}, {255, 0}});
+    region1.className = "Defect";
+    regions.push_back(region1);
+    DraftBrushRegion region2;
+    region2.mask = maskFromRows({{255, 255}, {0, 0}});
+    region2.className = "Scratch";
+    regions.push_back(region2);
+
+    const auto result = buildBrushLabelResult(regions, "brush", "image", 2, 2);
+    CHECK(result.size() == 2);
+    CHECK(result[0]["type"] == "brushlabels");
+    CHECK(result[0]["from_name"] == "brush");
+    CHECK(result[0]["to_name"] == "image");
+    CHECK(result[0]["original_width"] == 2);
+    CHECK(result[0]["original_height"] == 2);
+    CHECK(result[0]["value"]["format"] == "rle");
+    CHECK(result[0]["value"]["brushlabels"][0] == "Defect");
+    CHECK(result[1]["value"]["brushlabels"][0] == "Scratch");
+}
+
+void test_buildBrushLabelResult_skipsEmptyMask() {
+    std::vector<DraftBrushRegion> regions;
+    DraftBrushRegion region;
+    region.className = "Defect"; // mask left default-constructed (empty)
+    regions.push_back(region);
+    CHECK(buildBrushLabelResult(regions, "brush", "image", 10, 10).empty());
+}
+
+void test_parseBrushResultRegions_roundTripsThroughBuild() {
+    std::vector<DraftBrushRegion> original;
+    DraftBrushRegion region;
+    region.mask = maskFromRows({{0, 255, 0}, {255, 255, 0}});
+    region.className = "Defect";
+    original.push_back(region);
+
+    const auto built = buildBrushLabelResult(original, "brush", "image", 3, 2);
+    const auto parsed = parseBrushResultRegions(built, "brush");
+
+    CHECK(parsed.size() == 1);
+    CHECK(parsed[0].className == "Defect");
+    CHECK(parsed[0].mask.rows == 2);
+    CHECK(parsed[0].mask.cols == 3);
+    bool allMatch = true;
+    for (int r = 0; r < 2; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            if (parsed[0].mask.at<uint8_t>(r, c) != original[0].mask.at<uint8_t>(r, c)) {
+                allMatch = false;
+            }
+        }
+    }
+    CHECK(allMatch);
+}
+
+void test_parseBrushResultRegions_filtersByFromNameAndType() {
+    const auto result = nlohmann::json::parse(R"([
+        {"type": "brushlabels", "from_name": "otherBrush", "to_name": "image",
+         "original_width": 2, "original_height": 2,
+         "value": {"format": "rle", "rle": [0], "brushlabels": ["Defect"]}},
+        {"type": "rectanglelabels", "from_name": "brush", "to_name": "image"}
+    ])");
+    CHECK(parseBrushResultRegions(result, "brush").empty());
+}
+
+void test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId() {
+    TimestampMatchCandidate a;
+    a.taskId = 1;
+    a.imagePath = "/a.jpg";
+    a.deltaSeconds = 5;
+    TimestampMatchCandidate b;
+    b.taskId = 2;
+    b.imagePath = "/b.jpg";
+    b.deltaSeconds = -3;
+    TimestampMatchCandidate aAgain;
+    aAgain.taskId = 1;
+    aAgain.imagePath = "/a.jpg";
+    aAgain.deltaSeconds = 999;
+
+    const std::vector<std::vector<TimestampMatchCandidate>> perQuery = {{a, b}, {aAgain}};
+    const auto deduped = dedupTimestampMatchCandidates(perQuery);
+
+    CHECK(deduped.size() == 2);
+    CHECK(deduped[0].taskId == 1);
+    CHECK(deduped[0].deltaSeconds == 5);   // first occurrence kept, not the later duplicate
+    CHECK(deduped[1].taskId == 2);
+}
+
+void test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty() {
+    CHECK(dedupTimestampMatchCandidates({}).empty());
+}
+
+void test_parseLabelStudioTaskPage_bareArray() {
+    const nlohmann::json page = nlohmann::json::array({{{"id", 1}}, {{"id", 2}}});
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK(parsed.tasks->size() == 2);
+    CHECK(!parsed.total.has_value());
+}
+
+void test_parseLabelStudioTaskPage_tasksKeyWithTotal() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array({{{"id", 1}}})}, {"total", 150000}};
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK(parsed.tasks->size() == 1);
+    CHECK(parsed.total == 150000);
+}
+
+void test_parseLabelStudioTaskPage_resultsKey() {
+    const nlohmann::json page = {{"results", nlohmann::json::array({{{"id", 7}}})}, {"next", nullptr}};
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK((*parsed.tasks)[0]["id"] == 7);
+}
+
+void test_parseLabelStudioTaskPage_objectWithoutArrayHasNoTasks() {
+    const nlohmann::json page = {{"detail", "Not found."}};
+    CHECK(parseLabelStudioTaskPage(page).tasks == nullptr);
+}
+
+void test_isRetryableLabelStudioFailure() {
+    CHECK(isRetryableLabelStudioFailure(true, 0));     // timeout / connection reset
+    CHECK(isRetryableLabelStudioFailure(false, 429));
+    CHECK(isRetryableLabelStudioFailure(false, 502));
+    CHECK(isRetryableLabelStudioFailure(false, 503));
+    CHECK(!isRetryableLabelStudioFailure(false, 401));
+    CHECK(!isRetryableLabelStudioFailure(false, 404));
+    CHECK(!isRetryableLabelStudioFailure(false, 200));
+}
+
+nlohmann::json timestampFixtureTasks() {
+    return nlohmann::json::array({
+        {{"id", 1}, {"data", {{"image", "/1.jpg"}}}, {"created_at", "2026-09-10T10:00:00Z"}},
+        {{"id", 2}, {"data", {{"image", "/2.jpg"}}}, {"created_at", "2026-09-10T10:04:00Z"}},
+        {{"id", 3}, {"data", {{"image", "/3.jpg"}}}, {"created_at", "2026-09-10T11:00:00Z"}},
+        {{"id", 4}, {"data", {{"image", "/4.jpg"}}}},
+        {{"id", 5}, {"data", {{"image", "/5.jpg"}}}, {"created_at", "not a date"}},
+        {{"id", 6}, {"data", {{"other", "/6.jpg"}}}, {"created_at", "2026-09-10T10:01:00Z"}},
+    });
+}
+
+void test_matchSummariesToTimestamps_matchesRawJsonVersion() {
+    const nlohmann::json tasks = timestampFixtureTasks();
+    const std::time_t base = *parseIso8601Utc("2026-09-10T10:01:00Z");
+    const std::vector<TimestampMatchQuery> queries = {{base, 300}, {base + 3540, 60}};
+
+    const auto fromRaw = matchTasksToTimestamps(tasks, "image", queries);
+    const auto fromSummaries = matchSummariesToTimestamps(summarizeDatasetTasks(tasks, "image"), queries);
+
+    CHECK(fromSummaries.size() == fromRaw.size());
+    for (size_t q = 0; q < fromRaw.size() && q < fromSummaries.size(); ++q) {
+        CHECK(fromSummaries[q].size() == fromRaw[q].size());
+        for (size_t i = 0; i < fromRaw[q].size() && i < fromSummaries[q].size(); ++i) {
+            CHECK(fromSummaries[q][i].taskId == fromRaw[q][i].taskId);
+            CHECK(fromSummaries[q][i].imagePath == fromRaw[q][i].imagePath);
+            CHECK(fromSummaries[q][i].deltaSeconds == fromRaw[q][i].deltaSeconds);
+        }
+    }
+    if (fromSummaries.size() == 2) {
+        CHECK(fromSummaries[0].size() == 2);   // tasks 1 (-60s) and 2 (+180s)
+        CHECK(fromSummaries[1].size() == 1);   // task 3
+    }
+}
+
+void test_selectUnlabeledFromSummaries_matchesRawJsonVersion() {
+    const nlohmann::json tasks = nlohmann::json::array({
+        {{"id", 1}, {"data", {{"image", "/1.jpg"}}}, {"total_annotations", 0}, {"total_predictions", 0}},
+        {{"id", 2}, {"data", {{"image", "/2.jpg"}}}, {"total_annotations", 1}, {"total_predictions", 0}},
+        {{"id", 3}, {"data", {{"image", "/3.jpg"}}}, {"annotations", nlohmann::json::array()},
+         {"predictions", nlohmann::json::array({{{"result", nlohmann::json::array()}}})}},
+        {{"id", 4}, {"data", {{"image", "/4.jpg"}}}},
+    });
+    const auto fromRaw = selectUnlabeledTasks(tasks, "image");
+    const auto fromSummaries = selectUnlabeledFromSummaries(summarizeDatasetTasks(tasks, "image"));
+    CHECK(fromSummaries.size() == fromRaw.size());
+    CHECK(fromSummaries.size() == 2);
+    for (size_t i = 0; i < fromRaw.size() && i < fromSummaries.size(); ++i) {
+        CHECK(fromSummaries[i].taskId == fromRaw[i].taskId);
+        CHECK(fromSummaries[i].imagePath == fromRaw[i].imagePath);
+    }
+}
+
+void test_nextLabelStudioTaskPageAction_stopsWhenTotalReachedOnFullPage() {
+    // 150000 tasks = exactly 750 full pages: page 751 must not be requested.
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 150000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 150000;
+    progress.totalTasks = 150000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 750, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_nextLabelStudioTaskPageAction_fullPageBelowTotalFetchesNext() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 150000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 400;
+    progress.totalTasks = 150000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 2, 1000) == LabelStudioTaskPageAction::FetchNext);
+}
+
+void test_nextLabelStudioTaskPageAction_shortPageIsDone() {
+    const nlohmann::json page = nlohmann::json::array();
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 250;
+    CHECK(nextLabelStudioTaskPageAction(page, 50, 200, progress, 2, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_nextLabelStudioTaskPageAction_pageCapWithMoreExpectedIsReported() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 250000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 200000;
+    progress.totalTasks = 250000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 1000, 1000) == LabelStudioTaskPageAction::HitPageCap);
+}
+
+void test_nextLabelStudioTaskPageAction_pageCapOnLastPageIsDone() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 200000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 200000;
+    progress.totalTasks = 200000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 1000, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_formatIso8601Utc_millisecondZuluFormat() {
+    CHECK(formatIso8601Utc(static_cast<std::time_t>(1788213600)) == "2026-08-31T22:00:00.000Z");
+}
+
+void test_percentEncodeQueryValue_escapesReservedCharacters() {
+    CHECK(percentEncodeQueryValue("abcXYZ019-_.~") == "abcXYZ019-_.~");
+    CHECK(percentEncodeQueryValue("{\"a\":1, \"b\"}") == "%7B%22a%22%3A1%2C%20%22b%22%7D");
+    CHECK(percentEncodeQueryValue("2026-08-31T22:00:00.000Z") == "2026-08-31T22%3A00%3A00.000Z");
+}
+
+void test_buildLabelStudioCreatedAtQuery_emptyWhenUnbounded() {
+    CHECK(buildLabelStudioCreatedAtQuery(TaskCreatedAtBounds{}).empty());
+}
+
+void test_buildLabelStudioCreatedAtQuery_bothBounds() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = static_cast<std::time_t>(1788213600);
+    bounds.toExclusive = static_cast<std::time_t>(1788213600 + 86400);
+    const nlohmann::json query = nlohmann::json::parse(buildLabelStudioCreatedAtQuery(bounds));
+    const nlohmann::json expected = {
+        {"filters",
+         {{"conjunction", "and"},
+          {"items",
+           {{{"filter", "filter:tasks:created_at"}, {"operator", "greater_or_equal"}, {"type", "Datetime"},
+             {"value", "2026-08-31T22:00:00.000Z"}},
+            {{"filter", "filter:tasks:created_at"}, {"operator", "less"}, {"type", "Datetime"},
+             {"value", "2026-09-01T22:00:00.000Z"}}}}}},
+    };
+    CHECK(query == expected);
+}
+
+void test_buildLabelStudioCreatedAtQuery_fromOnly() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = static_cast<std::time_t>(1788213600);
+    const nlohmann::json query = nlohmann::json::parse(buildLabelStudioCreatedAtQuery(bounds));
+    CHECK(query["filters"]["items"].size() == 1);
+    CHECK(query["filters"]["items"][0]["operator"] == "greater_or_equal");
+}
+
+void test_isTaskCreatedWithin_inclusiveFromExclusiveTo() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = *parseIso8601Utc("2026-09-01T00:00:00Z");
+    bounds.toExclusive = *parseIso8601Utc("2026-09-02T00:00:00Z");
+    CHECK(isTaskCreatedWithin("2026-09-01T00:00:00Z", bounds));
+    CHECK(isTaskCreatedWithin("2026-09-01T23:59:59.999Z", bounds));
+    CHECK(!isTaskCreatedWithin("2026-09-02T00:00:00Z", bounds));
+    CHECK(!isTaskCreatedWithin("2026-08-31T23:59:59Z", bounds));
+    CHECK(!isTaskCreatedWithin("", bounds));   // unknown date can't be shown to be in range
+}
+
+void test_isTaskCreatedWithin_unboundedAcceptsEverything() {
+    CHECK(isTaskCreatedWithin("", TaskCreatedAtBounds{}));
+    CHECK(isTaskCreatedWithin("garbage", TaskCreatedAtBounds{}));
+}
+
 } // namespace
 
 int main() {
@@ -181,7 +948,78 @@ int main() {
     test_matchTasksToTimestamps_skipsTaskMissingCreatedAtOrDataKey();
     test_matchTasksToTimestamps_taskMatchesMultipleQueriesIndependently();
     test_matchTasksToTimestamps_emptyQueriesReturnsEmpty();
+    test_parseLabelStudioProjectConfigXml_singleRectangleLabelsTag();
+    test_parseLabelStudioProjectConfigXml_choicesTag();
+    test_parseLabelStudioProjectConfigXml_bothTagsPresent();
+    test_parseLabelStudioProjectConfigXml_noImageTagIsError();
+    test_parseLabelStudioProjectConfigXml_malformedXmlIsError();
+    test_parseLabelStudioProjectConfigXml_brushLabelsTag();
+    test_selectAllTaskSummaries_flagsAnnotationsAndPredictions();
+    test_selectAllTaskSummaries_fallsBackToArrayLengths();
+    test_selectAllTaskSummaries_skipsTaskMissingIdOrImageKey();
+    test_parseLabelStudioProjects_bareArray();
+    test_parseLabelStudioProjects_wrappedInResults();
+    test_parseLabelStudioProjects_skipsEntriesMissingIdOrTitle();
+    test_parseLabelStudioProjects_notAnArrayReturnsEmpty();
+    test_shouldFetchNextLabelStudioPage_nativeShapeFullPageContinues();
+    test_shouldFetchNextLabelStudioPage_nativeShapeShortPageStops();
+    test_shouldFetchNextLabelStudioPage_nativeShapeEmptyPageStops();
+    test_shouldFetchNextLabelStudioPage_drfShapeNullNextStopsEvenOnFullPage();
+    test_shouldFetchNextLabelStudioPage_drfShapeNonNullNextContinues();
+    test_shouldFetchNextLabelStudioPage_bareArrayFullPageContinues();
+    test_countLabelStudioTasks_bareArray();
+    test_countLabelStudioTasks_wrappedInTasks();
+    test_countLabelStudioTasks_emptyArrayIsZero();
+    test_countLabelStudioTasks_notAnArrayOrTasksObjectIsZero();
+    test_parseLabelStudioTaskDetail_withAnnotationAndPrediction();
+    test_parseLabelStudioTaskDetail_noAnnotationOrPrediction();
+    test_parseLabelStudioTaskDetail_missingImageKeyIsError();
+    test_parseDetectionResultBoxes_convertsPercentToPixels();
+    test_parseDetectionResultBoxes_filtersByFromNameAndType();
+    test_parseDetectionResultBoxes_preservesRotation();
+    test_parseLabelStudioExport_preservesRotation();
+    test_buildDetectionPredictionResult_writesRotation();
+    test_buildDetectionPredictionResult_defaultsRotationToZero();
+    test_parseChoiceResultLabel_findsMatchingChoice();
+    test_parseChoiceResultLabel_noMatchReturnsNullopt();
+    test_parseChoiceResultLabel_emptyResultReturnsNullopt();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2AllZero();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x2All255();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_2x3OnePixel();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x20LongRun();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x9Run();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x17Run();
+    test_encodeMaskToLabelStudioRle_matchesGroundTruth_1x6Alternating();
+    test_rleRoundTrip_preserves2DShape();
+    test_rleRoundTrip_runLengthBoundary_8vs9();
+    test_rleRoundTrip_runLengthBoundary_256vs257();
+    test_rleRoundTrip_runLongerThan65536Chunks();
+    test_buildBrushLabelResult_oneItemPerRegion();
+    test_buildBrushLabelResult_skipsEmptyMask();
+    test_parseBrushResultRegions_roundTripsThroughBuild();
+    test_parseBrushResultRegions_filtersByFromNameAndType();
+    test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId();
+    test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty();
+    test_parseLabelStudioTaskPage_bareArray();
+    test_parseLabelStudioTaskPage_tasksKeyWithTotal();
+    test_parseLabelStudioTaskPage_resultsKey();
+    test_parseLabelStudioTaskPage_objectWithoutArrayHasNoTasks();
+    test_isRetryableLabelStudioFailure();
 
+    test_matchSummariesToTimestamps_matchesRawJsonVersion();
+    test_selectUnlabeledFromSummaries_matchesRawJsonVersion();
+    test_nextLabelStudioTaskPageAction_stopsWhenTotalReachedOnFullPage();
+    test_nextLabelStudioTaskPageAction_fullPageBelowTotalFetchesNext();
+    test_nextLabelStudioTaskPageAction_shortPageIsDone();
+    test_nextLabelStudioTaskPageAction_pageCapWithMoreExpectedIsReported();
+    test_nextLabelStudioTaskPageAction_pageCapOnLastPageIsDone();
+    test_formatIso8601Utc_millisecondZuluFormat();
+    test_percentEncodeQueryValue_escapesReservedCharacters();
+    test_buildLabelStudioCreatedAtQuery_emptyWhenUnbounded();
+    test_buildLabelStudioCreatedAtQuery_bothBounds();
+    test_buildLabelStudioCreatedAtQuery_fromOnly();
+    test_isTaskCreatedWithin_inclusiveFromExclusiveTo();
+    test_isTaskCreatedWithin_unboundedAcceptsEverything();
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
         return 0;

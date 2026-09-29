@@ -1,7 +1,9 @@
 #include "widgets/timestamp_search_window.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/image_fit.hpp"
 #include "manager/label_studio_client.hpp"
+#include "widgets/label_studio_window.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -9,15 +11,6 @@
 #include <ctime>
 
 namespace {
-
-void drawConnectionFields(TimestampSearchState& state) {
-    ImGui::InputText("Label Studio URL", &state.labelStudioBaseUrl);
-    ImGui::InputInt("Project ID", &state.labelStudioProjectId);
-    ImGui::InputText("API Token", &state.labelStudioApiToken, ImGuiInputTextFlags_Password);
-    if (!state.labelStudioAutoFetchStatus.empty()) {
-        ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
-    }
-}
 
 void drawEntryList(TimestampSearchState& state) {
     ImGui::InputInt("Tolerance (+/- minutes)", &state.toleranceMinutes);
@@ -55,7 +48,8 @@ void drawEntryList(TimestampSearchState& state) {
     ImGui::EndChild();
 }
 
-void drawSearchBar(TimestampSearchState& state) {
+void drawSearchBar(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     ImGui::Separator();
     if (state.runState == TimestampSearchRunState::Running) {
         if (!state.lastProgress.phaseLabel.empty()) {
@@ -82,19 +76,23 @@ void drawSearchBar(TimestampSearchState& state) {
             break;
         }
     }
-    const bool canSearch = anyValidEntry && !state.labelStudioBaseUrl.empty() && state.labelStudioProjectId > 0
-        && !state.labelStudioApiToken.empty();
+    const bool canSearch = anyValidEntry && !session.baseUrl.empty() && session.activeProjectId > 0
+        && !session.apiToken.empty() && sharedData.loaded;
     ImGui::BeginDisabled(!canSearch);
     if (ImGui::Button("Search")) {
-        startTimestampSearch(state);
+        startTimestampSearch(state, session, sharedData);
     }
     ImGui::EndDisabled();
     if (!canSearch) {
-        ImGui::TextDisabled("Fill in the Label Studio connection and add at least one valid timestamp to search.");
+        ImGui::TextDisabled(
+            sharedData.loaded
+                ? "Fill in the Label Studio connection and add at least one valid timestamp to search."
+                : "Waiting for the task list to load -- click Refresh task list above.");
     }
 }
 
-void drawResults(TimestampSearchState& state) {
+void drawResults(
+    TimestampSearchState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask) {
     if (!state.resultError.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", state.resultError.c_str());
         return;
@@ -117,13 +115,7 @@ void drawResults(TimestampSearchState& state) {
                 const ImVec2 size =
                     fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 160.0f, 160.0f);
                 ImGui::Image((void*)(intptr_t)candidateView.texture, size);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-                    ImGui::BeginTooltip();
-                    const ImVec2 largeSize =
-                        fitImageToRegion(candidateView.textureWidth, candidateView.textureHeight, 480.0f, 480.0f);
-                    ImGui::Image((void*)(intptr_t)candidateView.texture, largeSize);
-                    ImGui::EndTooltip();
-                }
+                drawHoverEnlargedImage(candidateView.texture, candidateView.textureWidth, candidateView.textureHeight, size);
             } else {
                 ImGui::TextDisabled("(image unavailable)");
             }
@@ -137,6 +129,9 @@ void drawResults(TimestampSearchState& state) {
             std::strftime(timeBuf, sizeof(timeBuf), "%Y/%m/%d %H:%M:%S", &tm);
             ImGui::Text("Created: %s UTC", timeBuf);
             ImGui::Text("Delta: %+lld sec", candidateView.candidate.deltaSeconds);
+            if (ImGui::SmallButton("Label")) {
+                onLabelTask(candidateView.candidate.taskId);
+            }
             ImGui::EndGroup();
             ImGui::PopID();
         }
@@ -145,25 +140,33 @@ void drawResults(TimestampSearchState& state) {
 
 } // namespace
 
-void drawTimestampSearchWindow(bool* show, TimestampSearchState& state) {
-    if (!*show) {
-        return;
-    }
+void drawTimestampSearchTabContent(
+    TimestampSearchState& state, const LabelStudioSessionState& session, SharedLabelStudioProjectData& sharedData,
+    const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
+    drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
 
-    ImGui::SetNextWindowSize(ImVec2(700.0f, 800.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Find by Timestamp", show)) {
-        ImGui::End();
-        return;
+    ImGui::BeginDisabled(sharedData.loading);
+    if (ImGui::Button("Refresh task list")) {
+        refreshSharedLabelStudioProjectData(sharedData, session);
     }
+    ImGui::EndDisabled();
+    if (sharedData.loading) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", describeSharedTaskListLoadProgress(sharedData).c_str());
+    } else if (!sharedData.error.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
+    } else if (sharedData.loaded) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu task(s) loaded", sharedData.summaries.size());
+    }
+    drawSharedTaskRangeNote(sharedData);
 
-    drawConnectionFields(state);
     ImGui::Separator();
     drawEntryList(state);
-    drawSearchBar(state);
+    drawSearchBar(state, session, sharedData);
 
     if (state.runState == TimestampSearchRunState::Complete) {
-        drawResults(state);
+        drawResults(state, session, onLabelTask);
     }
-
-    ImGui::End();
 }

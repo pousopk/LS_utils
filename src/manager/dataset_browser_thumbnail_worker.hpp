@@ -1,0 +1,109 @@
+#pragma once
+
+#include "manager/label_studio_dataset_browser.hpp"
+#include "manager/label_studio_import.hpp"
+
+#include <opencv2/core.hpp>
+
+#include <atomic>
+#include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
+#include <vector>
+
+// The longer side a downloaded image is resized to before being handed
+// back for texture upload. 480 (up from an earlier 320, still not
+// enough headroom above the detail panel's 280px enlarged preview --
+// see dataset_browser_window.cpp -- to look sharp once GL_LINEAR
+// filtering and the initial cv::INTER_AREA downsize are both in play):
+// at DatasetThumbnailCache::kResidentCap's 300 resident textures, this
+// is ~198MB of worst-case (square) texture VRAM, ~2.25x the download/
+// decode cost per thumbnail versus 320. Chosen as the point where the
+// detail panel is comfortably sharp without the memory/bandwidth cost
+// of going further (640+) for a preview that's only ever shown at
+// 280px anyway.
+constexpr int kDatasetThumbnailMaxDim = 480;
+
+struct DatasetThumbnailRequest {
+    int taskId = 0;
+    std::string imagePath;   // task.data[dataImageKey], as returned by Label Studio
+    // The boxes/masks to draw onto the decoded thumbnail (via
+    // boxesToDrawForTask/masksToDrawForTask -- caller picks the
+    // annotation or prediction list depending on
+    // DatasetBrowserState::overlayMode), in original-image pixel space
+    // -- run() scales/resizes these to match the resize it applies
+    // before drawing. Empty if the project has no RectangleLabels/
+    // BrushLabels tag or this task has no boxes/masks of that kind.
+    // Masks are composited first, boxes drawn on top, so a box's
+    // outline and label stay legible against the mask's color wash.
+    // Masks arrive still RLE-encoded (see DatasetEncodedMask); run()
+    // decodes them on this worker thread, only for thumbnails it
+    // actually builds.
+    std::vector<DraftDetectionBox> boxesToDraw;
+    std::vector<DatasetEncodedMask> masksToDraw;
+};
+
+struct DatasetThumbnailResult {
+    int taskId = 0;
+    bool success = false;
+    cv::Mat thumbnail;   // BGR, resized to kDatasetThumbnailMaxDim on its longer side, boxes baked in; empty if !success
+};
+
+// A single background thread processing a FIFO queue of thumbnail
+// requests: downloads each requested image's bytes (via
+// downloadTaskImageBytes), decodes with cv::imdecode, and resizes to
+// kDatasetThumbnailMaxDim -- CPU-only, no GL calls (the main thread does
+// the actual texture upload from the decoded cv::Mat this hands back).
+// One thread, not a pool -- matches every other worker in this app and
+// avoids new curl-concurrency questions. Starts on construction and runs
+// until destruction (unlike this app's other, start-once-per-job
+// workers), since thumbnail requests arrive continuously while the grid
+// is scrolled. Right before decoding each request (not just at enqueue
+// time), checks it's still in the most recent setStillWanted() set, so a
+// fast scroll doesn't waste time decoding thumbnails already scrolled
+// past. Not copyable.
+class DatasetThumbnailWorker {
+public:
+    DatasetThumbnailWorker();
+    ~DatasetThumbnailWorker();
+    DatasetThumbnailWorker(const DatasetThumbnailWorker&) = delete;
+    DatasetThumbnailWorker& operator=(const DatasetThumbnailWorker&) = delete;
+
+    // Sets the connection this worker downloads through -- call whenever
+    // the active project's connection details change.
+    void setConnection(std::string baseUrl, std::string apiToken);
+
+    // Enqueues a request if `taskId` isn't already pending.
+    void requestThumbnail(DatasetThumbnailRequest request);
+
+    // Replaces the "still wanted" set the background thread consults
+    // before decoding each request -- call this every frame with the
+    // current visible+lookahead task ids.
+    void setStillWanted(std::vector<int> stillWantedTaskIds);
+
+    // Drains up to `maxResults` completed results (both successes and
+    // failures) into `out`, non-blocking. Called once per frame by the
+    // main thread, which does the actual GL upload.
+    void drainResults(std::vector<DatasetThumbnailResult>& out, size_t maxResults);
+
+private:
+    void run();
+
+    std::string baseUrl_;
+    std::string apiToken_;
+    mutable std::mutex connectionMutex_;
+
+    std::thread thread_;
+    std::atomic<bool> stopRequested_{false};
+
+    mutable std::mutex queueMutex_;
+    std::queue<DatasetThumbnailRequest> pendingRequests_;
+    std::vector<int> pendingIds_;   // ids currently in pendingRequests_, so requestThumbnail can dedupe cheaply
+
+    mutable std::mutex stillWantedMutex_;
+    std::vector<int> stillWanted_;
+
+    mutable std::mutex resultsMutex_;
+    std::vector<DatasetThumbnailResult> completedResults_;
+};

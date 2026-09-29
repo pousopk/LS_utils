@@ -1,6 +1,7 @@
 #include "manager/label_assistant_state.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
+#include "manager/label_assistant_control_tag.hpp"
 #include "manager/label_studio_client.hpp"
 
 #include <opencv2/imgcodecs.hpp>
@@ -31,7 +32,8 @@ std::string labelAssistantScratchFolder() {
 
 } // namespace
 
-void startLabelAssistantRun(LabelAssistantState& state) {
+void startLabelAssistantRun(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     LabelAssistantRunConfig config;
     config.mode = state.taskMode;
     config.detectionModel = state.modelConfig.detectionModel;
@@ -46,10 +48,9 @@ void startLabelAssistantRun(LabelAssistantState& state) {
         std::filesystem::remove_all(scratchFolder, ec);
         std::filesystem::create_directories(scratchFolder, ec);
 
-        config.labelStudioBaseUrl = state.labelStudioBaseUrl;
-        config.labelStudioProjectId = state.labelStudioProjectId;
-        config.labelStudioApiToken = state.labelStudioApiToken;
-        config.labelStudioDataImageKey = state.labelStudioDataImageKey;
+        config.labelStudioBaseUrl = session.baseUrl;
+        config.labelStudioApiToken = session.apiToken;
+        config.unlabeledTasks = selectUnlabeledFromSummaries(sharedData.summaries);
         config.scratchFolderPath = scratchFolder;
         state.imageFolderPath = scratchFolder;
     } else {
@@ -115,38 +116,56 @@ void syncLabelAssistantSelectedPreview(LabelAssistantState& state) {
     uploadFrameToTexture(state.previewTexture, toUpload, state.previewTextureWidth, state.previewTextureHeight);
 }
 
-std::string buildAutoFetchKey(const LabelAssistantState& state) {
-    return state.labelStudioBaseUrl + "|" + std::to_string(state.labelStudioProjectId) + "|"
-        + state.labelStudioApiToken + "|" + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
+std::string buildControlTagKey(const LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
+    return sharedData.lastFetchKey + "|" + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
 }
 
-void syncLabelAssistantAutoFetch(LabelAssistantState& state) {
-    if (state.labelStudioBaseUrl.empty() || state.labelStudioProjectId <= 0 || state.labelStudioApiToken.empty()) {
+void syncLabelAssistantControlTag(LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
+    if (sharedData.lastFetchKey.empty()) {
         return;
     }
-    const std::string key = buildAutoFetchKey(state);
+    const std::string key = buildControlTagKey(state, sharedData);
     if (key == state.lastAutoFetchKey) {
         return;
     }
     state.lastAutoFetchKey = key;
 
-    const bool isDetection = state.taskMode == ComparisonTaskMode::Detection;
-    const LabelStudioLabelingConfig config = fetchLabelStudioLabelingConfig(
-        state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, isDetection);
-
-    if (config.error.empty()) {
-        state.labelFromName = config.fromName;
-        state.imageToName = config.toName;
-        state.labelStudioDataImageKey = config.dataImageKey;
-        state.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
-    } else {
-        state.labelStudioAutoFetchStatus = "Labeling config: " + config.error;
-    }
+    const LabelAssistantControlTagResolution resolution =
+        resolveLabelAssistantControlTag(sharedData.projectConfig.controlTags, state.taskMode);
+    state.labelFromName = resolution.fromName;
+    state.imageToName = resolution.toName;
+    state.labelStudioAutoFetchStatus =
+        resolution.error.empty() ? "Auto-filled from Label Studio project settings" : resolution.error;
 }
 
 } // namespace
 
-void updateLabelAssistantState(LabelAssistantState& state) {
+namespace {
+
+std::string describePushResult(const LabelAssistantState& state, const LabelStudioPushRunResult& pushResult) {
+    if (pushResult.mode == LabelStudioPushMode::AttachToKnownTasks) {
+        const LabelStudioAttachSummary& summary = pushResult.attachSummary;
+        std::string status = "Created " + std::to_string(summary.created) + ", failed "
+            + std::to_string(summary.failed);
+        if (state.lastPushUnresolvedCount > 0) {
+            status += ", unresolved " + std::to_string(state.lastPushUnresolvedCount);
+        }
+        return status;
+    }
+
+    const LabelStudioPushSummary& summary = pushResult.uploadSummary;
+    if (!summary.error.empty()) {
+        return summary.error;
+    }
+    return "Created " + std::to_string(summary.created) + ", upload failed "
+        + std::to_string(summary.uploadFailed) + ", task not resolved " + std::to_string(summary.taskNotResolved)
+        + ", prediction failed " + std::to_string(summary.predictionFailed);
+}
+
+} // namespace
+
+void updateLabelAssistantState(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     if (state.runState == LabelAssistantRunState::Running) {
         state.lastProgress = state.worker.progress();
 
@@ -161,7 +180,18 @@ void updateLabelAssistantState(LabelAssistantState& state) {
         }
     }
 
-    syncLabelAssistantAutoFetch(state);
+    if (state.pushState == LabelAssistantPushState::Running) {
+        state.lastPushProgress = state.pushWorker.progress();
+
+        LabelStudioPushRunResult pushResult;
+        if (state.pushWorker.tryTakeResult(pushResult)) {
+            state.pushState = pushResult.cancelled ? LabelAssistantPushState::Cancelled
+                                                    : LabelAssistantPushState::Complete;
+            state.exportStatus = describePushResult(state, pushResult);
+        }
+    }
+
+    syncLabelAssistantControlTag(state, sharedData);
 
     syncLabelAssistantSelectedPreview(state);
 }
@@ -199,46 +229,36 @@ std::vector<DraftPrediction> buildDraftPredictions(const LabelAssistantState& st
 
 } // namespace
 
-void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state) {
+void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const LabelStudioSessionState& session) {
     const std::vector<DraftPrediction> draftPredictions = buildDraftPredictions(state);
 
+    LabelStudioPushConfig config;
+    config.baseUrl = session.baseUrl;
+    config.apiToken = session.apiToken;
+
     if (state.sourceMode == LabelAssistantSourceMode::LabelStudioProject) {
-        std::vector<LabelStudioKnownTaskPrediction> predictions;
-        predictions.reserve(draftPredictions.size());
-        int unresolved = 0;
+        config.mode = LabelStudioPushMode::AttachToKnownTasks;
+        config.knownTaskPredictions.reserve(draftPredictions.size());
+        state.lastPushUnresolvedCount = 0;
         for (const auto& draft : draftPredictions) {
             const std::optional<int> taskId = parseTaskIdFromFilename(draft.filename);
             if (!taskId) {
-                unresolved++;
+                state.lastPushUnresolvedCount++;
                 continue;
             }
-            predictions.push_back(LabelStudioKnownTaskPrediction{*taskId, draft.resultAndScore});
+            config.knownTaskPredictions.push_back(LabelStudioKnownTaskPrediction{*taskId, draft.resultAndScore});
         }
-
-        const LabelStudioAttachSummary summary =
-            attachPredictionsToKnownTasks(state.labelStudioBaseUrl, state.labelStudioApiToken, predictions);
-
-        state.exportStatus = "Created " + std::to_string(summary.created) + ", failed "
-            + std::to_string(summary.failed) + (unresolved > 0 ? ", unresolved " + std::to_string(unresolved) : "");
-        return;
+    } else {
+        config.mode = LabelStudioPushMode::UploadNewTasks;
+        config.projectId = session.activeProjectId;
+        config.newTaskPredictions.reserve(draftPredictions.size());
+        for (const auto& draft : draftPredictions) {
+            config.newTaskPredictions.push_back(LabelStudioPredictionInput{
+                draft.filename, state.imageFolderPath + "/" + draft.filename, draft.resultAndScore});
+        }
     }
 
-    std::vector<LabelStudioPredictionInput> predictions;
-    predictions.reserve(draftPredictions.size());
-    for (const auto& draft : draftPredictions) {
-        predictions.push_back(LabelStudioPredictionInput{
-            draft.filename, state.imageFolderPath + "/" + draft.filename, draft.resultAndScore});
-    }
-
-    const LabelStudioPushSummary summary = pushDraftsAsNewLabelStudioTasks(
-        state.labelStudioBaseUrl, state.labelStudioProjectId, state.labelStudioApiToken, predictions);
-
-    if (!summary.error.empty()) {
-        state.exportStatus = summary.error;
-        return;
-    }
-
-    state.exportStatus = "Created " + std::to_string(summary.created) + ", upload failed "
-        + std::to_string(summary.uploadFailed) + ", task not resolved " + std::to_string(summary.taskNotResolved)
-        + ", prediction failed " + std::to_string(summary.predictionFailed);
+    state.exportStatus.clear();
+    state.pushWorker.start(std::move(config));
+    state.pushState = LabelAssistantPushState::Running;
 }

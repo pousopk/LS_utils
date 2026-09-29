@@ -1,6 +1,9 @@
 #pragma once
 
 #include "manager/label_assistant_worker.hpp"
+#include "manager/label_studio_project_data.hpp"
+#include "manager/label_studio_push_worker.hpp"
+#include "manager/label_studio_session.hpp"
 #include "manager/model_evaluation_state.hpp"
 #include "manager/onnx_metadata.hpp"
 
@@ -10,6 +13,17 @@
 #include <string>
 
 enum class LabelAssistantRunState {
+    NotStarted,
+    Running,
+    Complete,
+    Cancelled,
+};
+
+// Separate from LabelAssistantRunState: pushing drafts to Label Studio is
+// an independent operation from the model-inference run above (its own
+// worker, its own progress), even though both reuse the
+// NotStarted/Running/Complete/Cancelled shape.
+enum class LabelAssistantPushState {
     NotStarted,
     Running,
     Complete,
@@ -71,24 +85,27 @@ struct LabelAssistantState {
     // no duplication risk.
     std::string labelFromName;   // choicesFromName (Classification mode) or rectangleLabelsFromName (Detection mode)
     std::string imageToName;
-    std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
-    std::string labelStudioApiToken;
-    // The key under a task's `data` holding its image path (e.g.
-    // "image"), auto-fetched alongside labelFromName/imageToName --
-    // needed in LabelStudioProject mode to know what to download.
-    std::string labelStudioDataImageKey;
     // Detection mode only: whether images with zero detected boxes are
     // included in the push/attach (given an empty prediction) or left out
     // entirely. Classification always includes every drafted image, so
     // this has no effect there.
     bool includeZeroDetectionImages = false;
+    LabelStudioPushWorker pushWorker;
+    LabelAssistantPushState pushState = LabelAssistantPushState::NotStarted;
+    LabelStudioPushProgress lastPushProgress;
+    // Drafts whose filename didn't decode to a task id (LabelStudioProject
+    // mode only, via parseTaskIdFromFilename) -- computed synchronously
+    // before starting pushWorker, since it doesn't need a network call;
+    // folded into exportStatus once the push completes.
+    int lastPushUnresolvedCount = 0;
     std::string exportStatus;
 
-    // Tracks which (baseUrl, projectId, apiToken, taskMode) combination
-    // labelFromName/imageToName/labelStudioDataImageKey were last
-    // auto-fetched for, so updateLabelAssistantState only re-fetches when
-    // something relevant actually changes.
+    // Tracks which (sharedData.lastFetchKey, taskMode) combination
+    // labelFromName/imageToName were last resolved for (see
+    // resolveLabelAssistantControlTag), so updateLabelAssistantState only
+    // overwrites them when something relevant actually changes -- a user
+    // who manually edits labelFromName/imageToName in the UI must not
+    // have that edit clobbered every frame.
     std::string lastAutoFetchKey;
     std::string labelStudioAutoFetchStatus;
 
@@ -118,39 +135,48 @@ void loadLabelAssistantModel(LabelAssistantState& state);
 void applyLabelAssistantAutoDetect(LabelAssistantState& state);
 
 // Builds a LabelAssistantRunConfig from state.modelConfig/taskMode/
-// sourceMode, clears any previous result, and calls state.worker.start(...).
-// Caller must have already verified the model matching state.taskMode is
-// loaded (and, in LabelStudioProject mode, that the connection fields are
-// filled in). In LabelStudioProject mode, also clears/recreates the
-// hidden scratch download folder and points state.imageFolderPath at it
-// before starting, so every downstream consumer (review list, preview,
-// export) treats it exactly like a user-picked local folder. Sets
+// sourceMode plus session's connection info, clears any previous result,
+// and calls state.worker.start(...). Caller must have already verified
+// the model matching state.taskMode is loaded (and, in LabelStudioProject
+// mode, that session is connected with an active project). In
+// LabelStudioProject mode, also clears/recreates the hidden scratch
+// download folder and points state.imageFolderPath at it before
+// starting, so every downstream consumer (review list, preview, export)
+// treats it exactly like a user-picked local folder. Sets
 // state.runState = Running.
-void startLabelAssistantRun(LabelAssistantState& state);
+void startLabelAssistantRun(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData);
 
 // Called once per main-loop iteration while the window is open: polls
 // worker.progress()/tryTakeResult(), and on completion stores the result.
 // Always also lazily loads/uploads the currently selected image's preview
 // texture -- in Detection mode, draws that image's predicted boxes onto
 // the texture via annotateDetections first. A no-op if the selection
-// hasn't changed since the last call. Also lazily auto-fetches
-// labelFromName/imageToName/labelStudioDataImageKey from the Label Studio
-// project once labelStudioBaseUrl/labelStudioProjectId/labelStudioApiToken
-// are all set, via fetchLabelStudioLabelingConfig -- re-fetches only when
-// that combination (plus taskMode) actually changes (see
-// lastAutoFetchKey), never blocking manual edits to the resulting fields.
-void updateLabelAssistantState(LabelAssistantState& state);
+// hasn't changed since the last call. Also resolves labelFromName/
+// imageToName from sharedData.projectConfig.controlTags via
+// resolveLabelAssistantControlTag -- a plain local lookup, no network
+// call -- re-resolving only when (sharedData.lastFetchKey, taskMode)
+// actually changes (see lastAutoFetchKey), never blocking manual edits to
+// the resulting fields.
+void updateLabelAssistantState(
+    LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData);
 
 // Builds the mode-appropriate per-draft predictions (via
-// buildClassificationPredictionResult/buildDetectionPredictionResult) and
-// sends them to Label Studio -- the mechanism depends on state.sourceMode:
-// LocalFolder calls pushDraftsAsNewLabelStudioTasks (uploads each image,
-// creating a brand-new task per prediction); LabelStudioProject calls
-// attachPredictionsToKnownTasks, recovering each draft's already-known
-// task id from its filename via parseTaskIdFromFilename (the id this
-// window's own download phase encoded into it) -- no upload, no
-// duplication risk. In Detection mode, drafts with zero boxes are
+// buildClassificationPredictionResult/buildDetectionPredictionResult),
+// then starts state.pushWorker to send them to Label Studio via
+// session's connection info and returns immediately (does not block on
+// the network calls) -- the mechanism depends on state.sourceMode:
+// LocalFolder uses LabelStudioPushMode::UploadNewTasks
+// (pushDraftsAsNewLabelStudioTasks: uploads each image, creating a
+// brand-new task per prediction); LabelStudioProject uses
+// LabelStudioPushMode::AttachToKnownTasks (attachPredictionsToKnownTasks),
+// recovering each draft's already-known task id from its filename via
+// parseTaskIdFromFilename (the id this window's own download phase
+// encoded into it; drafts that don't resolve are counted into
+// state.lastPushUnresolvedCount and left out of the push) -- no upload,
+// no duplication risk. In Detection mode, drafts with zero boxes are
 // excluded from either path unless state.includeZeroDetectionImages is
 // set (Classification always includes every drafted image). Sets
-// exportStatus to a summary of what happened.
-void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state);
+// state.pushState = Running; updateLabelAssistantState polls the worker
+// and sets state.exportStatus to a summary once it completes.
+void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const LabelStudioSessionState& session);

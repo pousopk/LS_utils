@@ -1,19 +1,17 @@
 #pragma once
 
 #include "manager/anomaly_inference.hpp"
-#include "manager/anomaly_worker.hpp"
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
+#include "manager/batch_eval_filters.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/classification_metrics.hpp"
-#include "manager/classification_worker.hpp"
 #include "manager/comparison_task_mode.hpp"
 #include "manager/detection_metrics.hpp"
-#include "manager/inference_worker.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/label_studio_session.hpp"
 #include "manager/model_metadata_detection.hpp"
 #include "manager/yolo_inference.hpp"
-#include "objects/frame_source.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -25,9 +23,7 @@
 
 struct ModelEvaluationState;
 
-// Shared model configuration for one "slot" (Model A or Model B), used
-// regardless of whether the evaluation source is Live or Batch. Loading a
-// model here makes it available to both sources without reloading.
+// Shared model configuration for one "slot" (Model A or Model B).
 struct ModelSlotConfig {
     std::string onnxPath;
     std::string classNamesPath;
@@ -38,6 +34,10 @@ struct ModelSlotConfig {
     int inputHeight = 0;
     float confThreshold = 0.25f;
     float nmsThreshold = 0.45f;
+    // Manual toggle -- auto-detecting OBB vs. axis-aligned from the ONNX
+    // file alone is ambiguous (a 1-class OBB model and a 2-class
+    // axis-aligned model produce the same output channel count).
+    bool isObbDetectionModel = false;
 
     std::shared_ptr<YoloModel> detectionModel;
     std::shared_ptr<ClassificationModel> classificationModel;
@@ -69,93 +69,11 @@ void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ComparisonTaskMode& taskM
 // it stays readable regardless of the photo's own colors.
 cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections);
 
-enum class EvaluationSourceMode {
-    Live,
-    Batch,
-};
-
-enum class LiveSourceMode {
-    None,
-    ExistingSession,
-    LoadedFile,
-};
-
-// Per-slot live-streaming runtime: the continuously-running inference
-// worker, its output texture, and its latest results. Kept separate from
-// ModelSlotConfig because it is Live-source-specific runtime state, not
-// model configuration. workerModel/workerClassificationModel track which
-// model the current worker was built from, so updateLiveRuntime can detect
-// a (re)load -- including one that happened while Batch was the active
-// source -- and rebuild the worker lazily.
-struct LiveRuntimeSlot {
-    GLuint texture = 0;
-    int textureWidth = 0;
-    int textureHeight = 0;
-
-    std::unique_ptr<InferenceWorker> worker;
-    std::shared_ptr<YoloModel> workerModel;
-    std::vector<Detection> latestDetections;
-    double latestInferenceMs = 0.0;
-
-    std::unique_ptr<ClassificationInferenceWorker> classificationWorker;
-    std::shared_ptr<ClassificationModel> workerClassificationModel;
-    std::vector<ClassPrediction> latestPredictions;
-
-    std::unique_ptr<AnomalyInferenceWorker> anomalyWorker;
-    std::shared_ptr<AnomalyModel> workerAnomalyModel;
-    AnomalyResult latestAnomalyResult;
-
-    std::string runtimeError;
-};
-
-struct LiveRuntime {
-    LiveSourceMode sourceMode = LiveSourceMode::None;
-    std::string sessionId;
-    std::unique_ptr<FrameSource> loadedSource;
-    std::string loadedSourcePath;
-
-    std::array<LiveRuntimeSlot, 2> liveSlots;
-
-    float agreementIoUThreshold = 0.5f;
-    BoxAgreement latestAgreement;
-};
-
-// Pulls the current frame from whichever live source is selected, submits
-// it to each active (0, or 0 and 1 if compareTwoModels) slot's idle
-// worker -- rebuilding that slot's worker first if its model was
-// (re)loaded since the last call -- drains finished results into that
-// slot's texture/stats, and recomputes the agreement stat (Detection mode,
-// compareTwoModels only).
-void updateLiveRuntime(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, LiveRuntime& live,
-    std::vector<CameraSession>& sessions);
-
 enum class BatchEvalRunState {
     NotStarted,
     Running,
     Complete,
     Cancelled,
-};
-
-enum class BatchEvalImageSortMode {
-    Filename,
-    ConfidenceAscending,
-    ConfidenceDescending,
-};
-
-enum class BatchEvalConfidenceFilterMode {
-    None,
-    LessThan,
-    GreaterThan,
-};
-
-// Detection mode only -- whether an image produced at least one detected
-// box. Meaningless for classification (a run always produces a top-1
-// prediction unless inference itself failed), so it's ignored there.
-enum class BatchEvalDetectionPresenceFilter {
-    Any,
-    HasDetections,
-    NoDetections,
 };
 
 struct BatchPreviewTexture {
@@ -184,9 +102,6 @@ struct BatchRuntime {
     // under a task's `data` holding its image path, needed to know what
     // to download; unlike Label Assistant's push, no from_name/to_name
     // are needed here since this only ever downloads, never pushes.
-    std::string labelStudioBaseUrl;
-    int labelStudioProjectId = 0;
-    std::string labelStudioApiToken;
     std::string labelStudioDataImageKey;
     std::string labelStudioAutoFetchStatus;
     std::string lastAutoFetchKey;
@@ -200,12 +115,9 @@ struct BatchRuntime {
     DetectionMetrics detectionMetricsA, detectionMetricsB;
     ClassificationMetrics classificationMetricsA, classificationMetricsB;
 
-    bool mismatchesOnly = false;
-    std::string imageListFilter;
+    std::string imageListFilter;  // filename search
     BatchEvalImageSortMode imageSortMode = BatchEvalImageSortMode::Filename;
-    BatchEvalConfidenceFilterMode confidenceFilterMode = BatchEvalConfidenceFilterMode::None;
-    float confidenceFilterThreshold = 0.5f;
-    BatchEvalDetectionPresenceFilter detectionPresenceFilter = BatchEvalDetectionPresenceFilter::Any;
+    BatchEvalImageFilters filters;
     std::optional<std::string> selectedImageFilename;
     std::optional<std::string> renderedPreviewFilename;
 
@@ -215,9 +127,8 @@ struct BatchRuntime {
     bool sampleEnabled = false;
     int sampleSize = 100;
 
-    // Per-slot preview texture for the currently selected image (Batch's
-    // per-image detail pane); Live's per-slot streaming texture lives on
-    // LiveRuntimeSlot instead.
+    // Per-slot preview texture for the currently selected image (the
+    // per-image detail pane).
     std::array<BatchPreviewTexture, 2> previewTextures;
 
     bool folderPickerOpen = false;
@@ -231,12 +142,12 @@ struct BatchRuntime {
 // LocalFolder mode only.
 void loadBatchEvalGroundTruth(BatchRuntime& batch);
 
-// Runs auto-detect on batch.labelStudioBaseUrl/ProjectId/ApiToken via the
-// shared fetchLabelStudioLabelingConfig, storing only dataImageKey (the
-// from_name/to_name it also returns are unused here). Re-fetches only
-// when that connection combination actually changes (see
+// Runs auto-detect on session's (baseUrl, activeProjectId, apiToken) via
+// the shared fetchLabelStudioLabelingConfig, storing only dataImageKey
+// (the from_name/to_name it also returns are unused here). Re-fetches
+// only when that connection combination actually changes (see
 // batch.lastAutoFetchKey). LabelStudioProject mode only.
-void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch);
+void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch, const LabelStudioSessionState& session);
 
 // Builds a BatchEvalRunConfig from slots + batch config (LocalFolder:
 // imageFolderPath + any loaded groundTruth as-is; LabelStudioProject:
@@ -244,10 +155,12 @@ void syncBatchEvalLabelStudioAutoFetch(BatchRuntime& batch);
 // at it, and lets the worker fill in groundTruth itself during its
 // download phase), clears any previous results, and calls
 // batch.worker.start(...). Caller must have already verified the
-// required slot(s) are loaded (and, in LabelStudioProject mode, that the
-// connection fields are filled in). Sets batch.runState = Running.
+// required slot(s) are loaded (and, in LabelStudioProject mode, that
+// session is connected with an active project). Sets batch.runState =
+// Running.
 void startBatchEvaluationRun(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch);
+    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, BatchRuntime& batch,
+    const LabelStudioSessionState& session);
 
 // Called once per main-loop iteration while the window is open: while a
 // run is in progress, polls worker.progress()/tryTakeResult() and, on
@@ -255,43 +168,11 @@ void startBatchEvaluationRun(
 // Always also lazily loads/annotates/uploads the currently selected
 // image's preview textures (a no-op if the selection hasn't changed), and
 // lazily runs syncBatchEvalLabelStudioAutoFetch (a no-op unless
-// LabelStudioProject mode's connection fields are filled in and changed).
+// LabelStudioProject mode's session is connected with an active project
+// and it changed).
 void updateBatchRuntime(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
-    BatchRuntime& batch);
-
-// True if the given filename is a "mismatch" for either slot: predicted
-// top-1 != true label (classification), or the image has an unmatched
-// prediction/ground-truth box at IoU >= 0.5 (detection). False if
-// `filename` has no ground truth in either slot's result.
-bool isBatchEvalImageMismatch(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// Representative confidence for `filename` in one slot's result: the
-// classification top-1 probability, or the mean confidence across all
-// detected boxes. std::nullopt if that slot has no result or no
-// prediction/detection for this image.
-std::optional<float> batchEvalImageConfidence(
-    ComparisonTaskMode mode, const BatchEvaluationResult& result, const std::string& filename);
-
-// True if `filename` passes the current confidence filter for either slot
-// (OR, matching isBatchEvalImageMismatch's convention). Always true when
-// batch.confidenceFilterMode == None.
-bool batchEvalImagePassesConfidenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// Sort key for BatchEvalImageSortMode::Confidence{Ascending,Descending}: the
-// lower of the two slots' confidences for `filename` (a slot with no
-// prediction contributes 0.0f, so images missing a prediction sort first
-// ascending / last descending).
-float batchEvalImageSortConfidence(ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
-
-// True if `filename` passes the current detection-presence filter for
-// either slot (OR, matching isBatchEvalImageMismatch's convention):
-// HasDetections passes if slot A or slot B found at least one box,
-// NoDetections passes if slot A or slot B found none. Always true when
-// mode != Detection or batch.detectionPresenceFilter == Any.
-bool batchEvalImagePassesDetectionPresenceFilter(
-    ComparisonTaskMode mode, const BatchRuntime& batch, const std::string& filename);
+    BatchRuntime& batch, const LabelStudioSessionState& session);
 
 enum class FilePickerTarget {
     SlotAModel,
@@ -299,21 +180,17 @@ enum class FilePickerTarget {
     SlotBModel,
     SlotBClassNames,
     GroundTruthJson,
-    LiveSourceFile,
 };
 
 struct ModelEvaluationState {
     ComparisonTaskMode taskMode = ComparisonTaskMode::Detection;
     bool compareTwoModels = false;  // default: single model
-    EvaluationSourceMode source = EvaluationSourceMode::Live;
 
     std::array<ModelSlotConfig, 2> slots;
 
-    LiveRuntime live;
     BatchRuntime batch;
 
-    // Shared file-picker popup state, reused for onnx/class-names/ground-
-    // truth/live-source-file selection across both slots and both sources.
+    // Shared file-picker popup state, reused for onnx/class-names/ground-truth selection across both slots.
     bool filePickerOpen = false;
     FilePickerTarget filePickerTarget = FilePickerTarget::SlotAModel;
     std::string filePickerDir;
@@ -321,11 +198,8 @@ struct ModelEvaluationState {
     std::string filePickerFilter;
 };
 
-// Resets both runtimes' results (live workers/textures/detections/
-// predictions, batch resultA/B/metrics/run state) without touching slot
-// config. Called on taskMode/compareTwoModels changes so neither source
-// ever shows stale content for a mode/count that no longer matches. Live
-// workers are torn down here but rebuild automatically on the next
-// updateLiveRuntime call (workerModel becomes null, which no longer
-// matches the still-loaded ModelSlotConfig, triggering a rebuild).
+// Resets batch results (resultA/B, metrics, run state, selection) and
+// drops filter values that no longer apply, without touching slot
+// config. Called on taskMode/compareTwoModels changes so the window
+// never shows results for a mode/count that no longer matches.
 void resetModelEvaluationResults(ModelEvaluationState& state);

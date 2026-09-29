@@ -83,6 +83,7 @@ LabelAssistantResult runAutoLabel(
                 box.box = detection.box;
                 box.className = detection.className;
                 box.confidence = detection.confidence;
+                box.rotationDegrees = detection.rotationDegrees;
                 draft.boxes.push_back(std::move(box));
             }
             result.detectionDrafts.push_back(std::move(draft));
