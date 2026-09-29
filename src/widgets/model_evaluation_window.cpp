@@ -1,9 +1,10 @@
 #include "widgets/model_evaluation_window.hpp"
 
-#include "widgets/file_browser_utils.hpp"
+#include "ui_common/file_browser_utils.hpp"
+#include "ui_common/image_fit.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
-#include "widgets/tooltip_helpers.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>

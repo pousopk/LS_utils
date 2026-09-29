@@ -1,11 +1,11 @@
 #include "widgets/label_assistant_window.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/image_fit.hpp"
 #include "manager/label_studio_client.hpp"
-#include "widgets/file_browser_utils.hpp"
+#include "ui_common/file_browser_utils.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
-#include "widgets/tooltip_helpers.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>

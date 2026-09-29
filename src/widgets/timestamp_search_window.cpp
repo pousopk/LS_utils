@@ -1,9 +1,9 @@
 #include "widgets/timestamp_search_window.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/image_fit.hpp"
 #include "manager/label_studio_client.hpp"
 #include "widgets/label_studio_window.hpp"
-#include "widgets/tooltip_helpers.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>

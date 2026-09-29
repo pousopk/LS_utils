@@ -1,6 +1,6 @@
 #pragma once
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/image_fit.hpp"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>

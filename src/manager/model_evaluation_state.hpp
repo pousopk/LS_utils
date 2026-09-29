@@ -1,7 +1,7 @@
 #pragma once
 
 #include "manager/anomaly_inference.hpp"
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
 #include "manager/batch_eval_filters.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"

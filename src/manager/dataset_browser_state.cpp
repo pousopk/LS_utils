@@ -1,6 +1,6 @@
 #include "manager/dataset_browser_state.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
 
 #include <algorithm>
 #include <filesystem>

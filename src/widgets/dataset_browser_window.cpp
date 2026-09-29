@@ -1,9 +1,9 @@
 #include "widgets/dataset_browser_window.hpp"
 
-#include "manager/app_runtime.hpp"
-#include "widgets/file_browser_utils.hpp"
+#include "ui_common/image_fit.hpp"
+#include "ui_common/file_browser_utils.hpp"
 #include "widgets/label_studio_window.hpp"
-#include "widgets/tooltip_helpers.hpp"
+#include "ui_common/tooltip_helpers.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>

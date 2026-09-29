@@ -1,6 +1,6 @@
 #include "manager/label_assistant_state.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
 #include "manager/label_assistant_control_tag.hpp"
 #include "manager/label_studio_client.hpp"
 

@@ -1,6 +1,7 @@
 #include "widgets/labeling_window.hpp"
 
-#include "manager/app_runtime.hpp"
+#include "ui_common/gl_texture.hpp"
+#include "ui_common/image_fit.hpp"
 #include "widgets/label_studio_window.hpp"
 
 #include <imgui.h>
