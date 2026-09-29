@@ -63,4 +63,3 @@ cmake -S . -B build && cmake --build build -j && ctest --test-dir build --output
 - `ui_common/` — generic UI helpers (app shell, GL texture upload, file browser, theme).
 - `third_party/` — vendored ONNX proto, nlohmann/json, pugixml.
 - `tests/` — unit tests, registered with CTest.
-- `docs/superpowers/` — design specs and implementation plans.
