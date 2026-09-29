@@ -51,7 +51,9 @@ void startDatasetBrowserExport(
     config.baseUrl = session.baseUrl;
     config.apiToken = session.apiToken;
     config.destinationFolder = state.exportDestinationFolder;
-    config.exportJson = buildDatasetExportJson(sharedData.rawTasksJson, state.matchingTaskIds);
+    config.projectId = session.activeProjectId;
+    config.matchingTaskIds = state.matchingTaskIds;
+    config.createdAtBounds = toCreatedAtBounds(sharedData.appliedImportDateRange);
 
     config.tasksToExport.reserve(state.matchingTaskIds.size());
     for (const int taskId : state.matchingTaskIds) {

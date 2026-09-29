@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/label_studio_dataset_browser.hpp"
 #include "manager/label_studio_import.hpp"
 
 #include <atomic>
@@ -63,6 +64,15 @@ struct TimestampMatchCandidate {
 // than one query if the windows overlap.
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
+
+// Pure function: the summary-based equivalent of matchTasksToTimestamps
+// -- same window test, same closest-first sort, same skip rules (a
+// summary already excludes tasks missing `id` or the image key; one
+// whose createdAt is empty or unparseable is skipped here). Exists so
+// the shared task list doesn't have to keep every task's raw JSON
+// around just for Timestamp Search.
+std::vector<std::vector<TimestampMatchCandidate>> matchSummariesToTimestamps(
+    const std::vector<DatasetTaskSummary>& summaries, const std::vector<TimestampMatchQuery>& queries);
 
 // Pure function: flattens `perQuery` (one candidate list per typed
 // timestamp entry) into a single list with each task id appearing at
@@ -300,6 +310,14 @@ struct LabelStudioUnlabeledTask {
 std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
 
+// Pure function: the summary-based equivalent of selectUnlabeledTasks --
+// every summary with neither an annotation nor a prediction. Matches it
+// exactly, since summarizeDatasetTasks derives hasAnnotation/
+// hasPrediction with the same totals-with-array-length-fallback rule and
+// skips the same tasks (missing `id` or image key). Exists for the same
+// reason as matchSummariesToTimestamps.
+std::vector<LabelStudioUnlabeledTask> selectUnlabeledFromSummaries(const std::vector<DatasetTaskSummary>& summaries);
+
 // Pure function: parses the leading numeric filename stem (before the
 // extension) of `filename` as a task id, e.g. "123.png" -> 123. Returns
 // std::nullopt if the stem is empty or contains anything but digits. Used
@@ -395,16 +413,119 @@ struct LabelStudioTaskSummary {
 std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
 
+// Pure function: formats `t` as Label Studio's Datetime filter value,
+// ISO-8601 UTC with milliseconds, e.g. "2026-08-31T22:00:00.000Z".
+std::string formatIso8601Utc(std::time_t t);
+
+// Pure function: RFC 3986 percent-encoding for a URL query value --
+// everything except unreserved characters (A-Z a-z 0-9 - _ . ~) becomes
+// %XX. Used for the JSON `query` parameter below.
+std::string percentEncodeQueryValue(const std::string& value);
+
+// A half-open window on a task's `created_at` (its import time): tasks
+// with fromInclusive <= created_at < toExclusive. Either side unset means
+// no limit on that side; both unset means the whole project.
+struct TaskCreatedAtBounds {
+    std::optional<std::time_t> fromInclusive;
+    std::optional<std::time_t> toExclusive;
+
+    bool unbounded() const { return !fromInclusive && !toExclusive; }
+};
+
+// Pure function: the JSON string for Label Studio's tasks-list `query`
+// parameter that asks the server to filter on created_at --
+// {"filters":{"conjunction":"and","items":[{"filter":
+// "filter:tasks:created_at","operator":"greater_or_equal"|"less",
+// "type":"Datetime","value":<formatIso8601Utc>}...]}}. Empty string if
+// `bounds` is unbounded (no query parameter is sent at all).
+std::string buildLabelStudioCreatedAtQuery(const TaskCreatedAtBounds& bounds);
+
+// Pure function: whether a task's raw `created_at` string falls within
+// `bounds`. Always true when unbounded; otherwise false for an empty or
+// unparseable value, since it can't be shown to be in range. The local
+// check that keeps a date-filtered load correct even on a Label Studio
+// version that ignores the `query` filter.
+bool isTaskCreatedWithin(const std::string& createdAt, const TaskCreatedAtBounds& bounds);
+
+// One parsed page of Label Studio's tasks-list API response.
+struct LabelStudioTaskPage {
+    const nlohmann::json* tasks = nullptr;   // points into the parsed page; nullptr if no task array found
+    std::optional<int> total;                // the response's integer "total" field, if present
+};
+
+// Pure function: locates the task array in one parsed tasks-list page --
+// a bare array, or an object with a "tasks" or "results" array (Label
+// Studio's exact response shape isn't pinned to one version) -- plus
+// Label Studio's native "total" task count when the response carries
+// one. `tasks` points into `parsedPage`, so it's only valid while
+// `parsedPage` is.
+LabelStudioTaskPage parseLabelStudioTaskPage(const nlohmann::json& parsedPage);
+
+// Pure function: whether a failed page request is worth retrying -- a
+// request-level failure (timeout, connection reset), HTTP 429, or any
+// 5xx. Anything else (401, 404, ...) won't fix itself on a retry.
+bool isRetryableLabelStudioFailure(bool requestFailed, long httpCode);
+
+struct LabelStudioTaskPageProgress {
+    int fetchedTasks = 0;              // tasks delivered so far, including the current page
+    std::optional<int> totalTasks;     // from the response's "total", if Label Studio reported one
+};
+
+// Called once per fetched page. `pageTasks` is only valid for the
+// duration of the call. Return false to stop fetching (the fetch then
+// reports Cancelled).
+using LabelStudioTaskPageCallback =
+    std::function<bool(const nlohmann::json& pageTasks, const LabelStudioTaskPageProgress& progress)>;
+
+enum class LabelStudioPagedFetchOutcome { Completed, Cancelled, Failed };
+
+enum class LabelStudioTaskPageAction { FetchNext, Done, HitPageCap };
+
+// Pure function: what forEachLabelStudioTaskPage does after delivering
+// page number `page` (1-based). Done once Label Studio's reported total
+// has been reached -- a project of exactly N*pageSize tasks would
+// otherwise request one page past the end, which Label Studio answers
+// with 404 -- or when shouldFetchNextLabelStudioPage says this was the
+// last page. HitPageCap if another page is still expected but `page` is
+// already `maxPages`: reported as a failure rather than silently
+// treating a truncated list as complete. FetchNext otherwise.
+LabelStudioTaskPageAction nextLabelStudioTaskPageAction(
+    const nlohmann::json& parsedPage, size_t pageItemCount, int pageSize, const LabelStudioTaskPageProgress& progress,
+    int page, int maxPages);
+
 // Fetches every task in the project (with predictions embedded, via Label
-// Studio's `fields=all` query param), paging via
-// shouldFetchNextLabelStudioPage until it says to stop. Handles a
-// bare-array response, or an object with a "tasks" or "results" array --
-// Label Studio's exact response shape isn't pinned to one version.
-// Capped at 1000 pages as a safety valve against an unexpected server
-// response looping forever. This is the raw fetch every higher-level
-// flow in this file (task summaries, downloads, prediction push/attach,
-// timestamp search, ground truth, the Dataset Browser) is built on top
-// of.
+// Studio's `fields=all` query param) one page at a time, handing each
+// page to `onPage` and then freeing it -- so, unlike
+// fetchAllLabelStudioTasksRaw, the caller decides what (if anything) to
+// keep, and a 100k+-task project never has to sit in memory as one JSON
+// tree. Decides after each page via nextLabelStudioTaskPageAction: stops
+// once Label Studio's reported total is reached (or on a short page), and
+// fails -- rather than silently reporting a truncated list as complete --
+// if a 1000-page safety cap (200k tasks) is hit with more still expected.
+// Each page request gets a 120s timeout and up to 3 attempts (1s, then
+// 2s backoff) when isRetryableLabelStudioFailure says so -- one slow or
+// flaky page no longer throws away everything fetched before it.
+// `cancelRequested` (if non-null) is checked between pages, during
+// backoff, and inside curl's transfer callback, so an in-flight request
+// aborts within about a second of it being set. On Failed, `error` names
+// the page and attempt that failed. A bounded `createdAtBounds` adds
+// buildLabelStudioCreatedAtQuery's `query` parameter to every page
+// request, so Label Studio only sends tasks imported in that window (and
+// its "total" becomes the filtered count); callers still check
+// isTaskCreatedWithin themselves, since not every server version honors
+// the filter.
+LabelStudioPagedFetchOutcome forEachLabelStudioTaskPage(
+    const std::string& baseUrl, int projectId, const std::string& apiToken,
+    const LabelStudioTaskPageCallback& onPage, const std::atomic<bool>* cancelRequested, std::string& error,
+    const TaskCreatedAtBounds& createdAtBounds = {});
+
+// Convenience wrapper over forEachLabelStudioTaskPage that accumulates
+// every task into one JSON array (same response-shape tolerance and page
+// cap). Holds the whole project in memory, so it's only suitable for
+// small projects or flows that genuinely need every raw task -- the
+// shared task list the Label Studio tabs use no longer goes through
+// this. Still used directly by the push/attach, timestamp search,
+// ground truth, and labeled-dataset download flows in this file.
 bool fetchAllLabelStudioTasksRaw(
     const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
     std::string& error);

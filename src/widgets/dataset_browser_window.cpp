@@ -128,7 +128,7 @@ void drawGrid(DatasetBrowserState& state, const SharedLabelStudioProjectData& sh
     clipper.End();
 
     static const DatasetBoxesToDraw kEmptyBoxes;
-    static const DatasetMasksToDraw kEmptyMasks;
+    static const DatasetEncodedMasks kEmptyMasks;
 
     for (const int taskId : visibleAndLookaheadIds) {
         state.thumbnailCache.touch(taskId);
@@ -139,7 +139,7 @@ void drawGrid(DatasetBrowserState& state, const SharedLabelStudioProjectData& sh
                 const auto masksIt = sharedData.masksByTaskId.find(taskId);
                 const DatasetBoxesToDraw& boxes =
                     boxesIt != sharedData.boxesByTaskId.end() ? boxesIt->second : kEmptyBoxes;
-                const DatasetMasksToDraw& masks =
+                const DatasetEncodedMasks& masks =
                     masksIt != sharedData.masksByTaskId.end() ? masksIt->second : kEmptyMasks;
                 const bool showAnnotations = state.overlayMode == DatasetOverlayMode::Annotations;
                 const auto& boxesToDraw = showAnnotations ? boxes.annotationBoxes : boxes.predictionBoxes;
@@ -235,7 +235,14 @@ void drawExportSection(
     }
 
     if (state.exportState == DatasetExportState::Running) {
-        ImGui::Text("%d / %d", state.lastExportProgress.completed, state.lastExportProgress.total);
+        const bool fetching = state.lastExportProgress.phase == DatasetExportPhase::FetchingTasks;
+        if (fetching && state.lastExportProgress.total == 0) {
+            ImGui::Text("Fetching task data: %d", state.lastExportProgress.completed);
+        } else {
+            ImGui::Text(
+                "%s: %d / %d", fetching ? "Fetching task data" : "Downloading images", state.lastExportProgress.completed,
+                state.lastExportProgress.total);
+        }
         const float fraction = state.lastExportProgress.total > 0
             ? static_cast<float>(state.lastExportProgress.completed) / static_cast<float>(state.lastExportProgress.total)
             : 0.0f;
@@ -277,22 +284,35 @@ void drawDatasetBrowserTabContent(
 
     if (sharedData.loading) {
         ImGui::SameLine();
-        ImGui::TextDisabled("Loading tasks...");
+        ImGui::TextDisabled("%s", describeSharedTaskListLoadProgress(sharedData).c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel load")) {
+            sharedData.worker.requestCancel();
+        }
     }
 
     if (!sharedData.error.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
     }
 
-    if (!sharedData.loaded) {
-        ImGui::TextDisabled("Click Refresh to load this project's tasks.");
+    if (sharedData.summaries.empty()) {
+        if (!sharedData.loading) {
+            ImGui::TextDisabled("Click Refresh to load this project's tasks.");
+        }
         return;
     }
 
     drawFilterControls(state, sharedData);
-    ImGui::Text("%zu of %zu tasks match", state.matchingTaskIds.size(), sharedData.summaries.size());
+    ImGui::Text(
+        "%zu of %zu tasks match%s", state.matchingTaskIds.size(), sharedData.summaries.size(),
+        sharedData.loaded ? "" : " (partial list)");
+    drawSharedTaskRangeNote(sharedData);
 
+    // Starting an export needs the complete list; a running export's
+    // Cancel button must stay usable regardless.
+    ImGui::BeginDisabled(!sharedData.loaded && state.exportState != DatasetExportState::Running);
     drawExportSection(state, session, sharedData);
+    ImGui::EndDisabled();
     drawExportFolderPickerPopup(state);
 
     ImGui::Separator();

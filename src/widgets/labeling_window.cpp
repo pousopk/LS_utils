@@ -35,9 +35,14 @@ void drawTaskListPanel(LabelingState& state, const LabelStudioSessionState& sess
     }
     ImGui::EndDisabled();
 
+    if (sharedData.loading) {
+        ImGui::TextDisabled("%s", describeSharedTaskListLoadProgress(sharedData).c_str());
+    }
+
     if (!sharedData.error.empty()) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
     }
+    drawSharedTaskRangeNote(sharedData);
 
     ImGui::Separator();
     for (const auto& task : state.taskList) {

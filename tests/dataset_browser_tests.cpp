@@ -2,8 +2,11 @@
 #include "manager/label_studio_dataset_browser.hpp"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/core.hpp>
 
 #include <cstdio>
+#include <sstream>
+#include <unordered_set>
 
 namespace {
 int g_failures = 0;
@@ -442,6 +445,163 @@ void test_indexSummariesByTaskId_emptyInputReturnsEmptyMap() {
     CHECK(indexSummariesByTaskId({}).empty());
 }
 
+nlohmann::json brushItem(const std::string& fromName, const cv::Mat& mask, const std::string& className) {
+    return {
+        {"type", "brushlabels"},
+        {"from_name", fromName},
+        {"original_width", mask.cols},
+        {"original_height", mask.rows},
+        {"value", {{"format", "rle"}, {"rle", encodeMaskToLabelStudioRle(mask)}, {"brushlabels", {className}}}},
+    };
+}
+
+cv::Mat squareMask(int size, int x0, int y0, int side) {
+    cv::Mat mask = cv::Mat::zeros(size, size, CV_8UC1);
+    mask(cv::Rect(x0, y0, side, side)).setTo(255);
+    return mask;
+}
+
+void test_buildEncodedMasksByTaskId_decodesToSameMasksAsEagerPath() {
+    const nlohmann::json tasks = nlohmann::json::array({{
+        {"id", 3},
+        {"annotations", {{{"result", {brushItem("tag", squareMask(16, 2, 2, 5), "scratch")}}}}},
+        {"predictions", {{{"result", {brushItem("tag", squareMask(16, 8, 8, 4), "dent"),
+                                      brushItem("other", squareMask(16, 0, 0, 3), "ignored")}}}}},
+    }});
+
+    const auto encoded = buildEncodedMasksByTaskId(tasks, "tag");
+    const DatasetMasksToDraw eager = masksToDrawForTask(tasks, "tag", 3);
+
+    CHECK(encoded.count(3) == 1);
+    if (encoded.count(3) == 0) {
+        return;
+    }
+    const auto annotation = decodeDatasetMasks(encoded.at(3).annotationMasks);
+    const auto prediction = decodeDatasetMasks(encoded.at(3).predictionMasks);
+    CHECK(annotation.size() == eager.annotationMasks.size());
+    CHECK(prediction.size() == eager.predictionMasks.size());
+    CHECK(prediction.size() == 1);
+    if (annotation.size() != 1 || prediction.size() != 1 || eager.annotationMasks.size() != 1
+        || eager.predictionMasks.size() != 1) {
+        return;
+    }
+    CHECK(annotation[0].className == "scratch");
+    CHECK(cv::countNonZero(annotation[0].mask != eager.annotationMasks[0].mask) == 0);
+    CHECK(cv::countNonZero(prediction[0].mask != eager.predictionMasks[0].mask) == 0);
+}
+
+void test_buildEncodedMasksByTaskId_emptyFromNameReturnsEmptyMap() {
+    const nlohmann::json tasks = nlohmann::json::array({{{"id", 1}}});
+    CHECK(buildEncodedMasksByTaskId(tasks, "").empty());
+}
+
+void test_buildEncodedMasksByTaskId_skipsOutOfRangeRle() {
+    nlohmann::json bad = brushItem("tag", squareMask(8, 1, 1, 2), "a");
+    bad["value"]["rle"][0] = 300;
+    const nlohmann::json tasks = nlohmann::json::array({{
+        {"id", 1},
+        {"annotations", {{{"result", {bad, brushItem("tag", squareMask(8, 4, 4, 2), "b")}}}}},
+    }});
+    const auto encoded = buildEncodedMasksByTaskId(tasks, "tag");
+    CHECK(encoded.count(1) == 1);
+    if (encoded.count(1) == 0) {
+        return;
+    }
+    CHECK(encoded.at(1).annotationMasks.size() == 1);
+    if (encoded.at(1).annotationMasks.size() == 1) {
+        CHECK(encoded.at(1).annotationMasks[0].className == "b");
+    }
+}
+
+void test_summarizeDatasetTasks_keepsCreatedAtString() {
+    const nlohmann::json tasks = nlohmann::json::array({
+        {{"id", 1}, {"data", {{"image", "/a.jpg"}}}, {"created_at", "2026-09-10T10:00:00.123Z"}},
+        {{"id", 2}, {"data", {{"image", "/b.jpg"}}}},
+    });
+    const auto summaries = summarizeDatasetTasks(tasks, "image");
+    CHECK(summaries.size() == 2);
+    if (summaries.size() == 2) {
+        CHECK(summaries[0].createdAt == "2026-09-10T10:00:00.123Z");
+        CHECK(summaries[1].createdAt.empty());
+    }
+}
+
+void test_writeMatchingTasksAsJsonArrayElements_acrossPagesPreservesOrder() {
+    const nlohmann::json page1 = nlohmann::json::array({{{"id", 1}, {"x", "a"}}, {{"id", 2}}});
+    const nlohmann::json page2 = nlohmann::json::array({{{"id", 3}}, {{"id", 4}, {"x", "d"}}});
+    std::unordered_set<int> ids = {1, 4};
+
+    std::ostringstream out;
+    bool wroteAny = false;
+    out << "[\n";
+    const size_t n1 = writeMatchingTasksAsJsonArrayElements(page1, ids, out, wroteAny);
+    const size_t n2 = writeMatchingTasksAsJsonArrayElements(page2, ids, out, wroteAny);
+    out << "\n]\n";
+
+    CHECK(n1 == 1);
+    CHECK(n2 == 1);
+    const nlohmann::json parsed = nlohmann::json::parse(out.str());
+    CHECK(parsed == nlohmann::json::array({{{"id", 1}, {"x", "a"}}, {{"id", 4}, {"x", "d"}}}));
+}
+
+void test_writeMatchingTasksAsJsonArrayElements_noMatchesStillValidJson() {
+    const nlohmann::json page = nlohmann::json::array({{{"id", 1}}});
+    std::ostringstream out;
+    bool wroteAny = false;
+    out << "[\n";
+    std::unordered_set<int> none;
+    CHECK(writeMatchingTasksAsJsonArrayElements(page, none, out, wroteAny) == 0);
+    out << "\n]\n";
+    CHECK(nlohmann::json::parse(out.str()) == nlohmann::json::array());
+    CHECK(!wroteAny);
+}
+
+void test_buildEncodedMasksByTaskId_skipsWronglyTypedFieldsWithoutThrowing() {
+    nlohmann::json nullWidth = brushItem("tag", squareMask(8, 1, 1, 2), "a");
+    nullWidth["original_width"] = nullptr;
+    nlohmann::json stringHeight = brushItem("tag", squareMask(8, 1, 1, 2), "b");
+    stringHeight["original_height"] = "8";
+    nlohmann::json negativeWidth = brushItem("tag", squareMask(8, 1, 1, 2), "c");
+    negativeWidth["original_width"] = -8;
+    nlohmann::json numericLabel = brushItem("tag", squareMask(8, 1, 1, 2), "d");
+    numericLabel["value"]["brushlabels"] = {5};
+    const nlohmann::json tasks = nlohmann::json::array({{
+        {"id", 1},
+        {"annotations", {{{"result", {nullWidth, stringHeight, negativeWidth, numericLabel,
+                                      brushItem("tag", squareMask(8, 4, 4, 2), "ok")}}}}},
+    }});
+    bool threw = false;
+    std::unordered_map<int, DatasetEncodedMasks> encoded;
+    try {
+        encoded = buildEncodedMasksByTaskId(tasks, "tag");
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(encoded.count(1) == 1);
+    if (encoded.count(1) == 1) {
+        CHECK(encoded.at(1).annotationMasks.size() == 1);
+        CHECK(!encoded.at(1).annotationMasks.empty() && encoded.at(1).annotationMasks[0].className == "ok");
+    }
+}
+
+void test_writeMatchingTasksAsJsonArrayElements_writesEachTaskOnceAcrossPages() {
+    // Offset shift during the export's re-fetch re-delivers task 2 on the next page.
+    const nlohmann::json page1 = nlohmann::json::array({{{"id", 1}}, {{"id", 2}}});
+    const nlohmann::json page2 = nlohmann::json::array({{{"id", 2}}, {{"id", 3}}});
+    std::unordered_set<int> remaining = {2, 3};
+
+    std::ostringstream out;
+    bool wroteAny = false;
+    out << "[\n";
+    writeMatchingTasksAsJsonArrayElements(page1, remaining, out, wroteAny);
+    writeMatchingTasksAsJsonArrayElements(page2, remaining, out, wroteAny);
+    out << "\n]\n";
+
+    CHECK(nlohmann::json::parse(out.str()) == nlohmann::json::array({{{"id", 2}}, {{"id", 3}}}));
+    CHECK(remaining.empty());
+}
+
 } // namespace
 
 int main() {
@@ -485,6 +645,14 @@ int main() {
     test_indexSummariesByTaskId_mapsEachTaskIdToItsIndex();
     test_indexSummariesByTaskId_emptyInputReturnsEmptyMap();
 
+    test_buildEncodedMasksByTaskId_decodesToSameMasksAsEagerPath();
+    test_buildEncodedMasksByTaskId_emptyFromNameReturnsEmptyMap();
+    test_buildEncodedMasksByTaskId_skipsOutOfRangeRle();
+    test_summarizeDatasetTasks_keepsCreatedAtString();
+    test_writeMatchingTasksAsJsonArrayElements_acrossPagesPreservesOrder();
+    test_writeMatchingTasksAsJsonArrayElements_noMatchesStillValidJson();
+    test_buildEncodedMasksByTaskId_skipsWronglyTypedFieldsWithoutThrowing();
+    test_writeMatchingTasksAsJsonArrayElements_writesEachTaskOnceAcrossPages();
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
         return 0;

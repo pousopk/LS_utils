@@ -128,6 +128,9 @@ void drawRunBar(
         ? !state.imageFolderPath.empty()
         : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty() && sharedData.loaded;
     const bool canRun = modelLoaded && sourceReady;
+    if (state.sourceMode == LabelAssistantSourceMode::LabelStudioProject) {
+        drawSharedTaskRangeNote(sharedData);
+    }
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
         startLabelAssistantRun(state, session, sharedData);

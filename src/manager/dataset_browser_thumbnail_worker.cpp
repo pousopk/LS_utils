@@ -180,7 +180,8 @@ void DatasetThumbnailWorker::run() {
                 } else {
                     resized = decoded;
                 }
-                cv::Mat withMasks = compositeMasksOnThumbnail(resized, request.masksToDraw);
+                const std::vector<DraftBrushRegion> masks = decodeDatasetMasks(request.masksToDraw);
+                cv::Mat withMasks = compositeMasksOnThumbnail(resized, masks);
                 drawBoxesOnThumbnail(withMasks, request.boxesToDraw, effectiveScale);
                 result.thumbnail = withMasks;
                 result.success = true;

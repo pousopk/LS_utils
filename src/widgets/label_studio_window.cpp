@@ -3,6 +3,7 @@
 #include "manager/labeling_state.hpp"
 #include "widgets/AppUi.hpp"
 #include "widgets/dataset_browser_window.hpp"
+#include "widgets/date_picker.hpp"
 #include "widgets/label_assistant_window.hpp"
 #include "widgets/labeling_window.hpp"
 #include "widgets/timestamp_search_window.hpp"
@@ -11,6 +12,20 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <string>
+
+void drawSharedTaskRangeNote(const SharedLabelStudioProjectData& sharedData) {
+    const std::string note = describeTaskImportDateRange(sharedData.appliedImportDateRange);
+    if (note.empty()) {
+        return;
+    }
+    ImGui::TextDisabled("%s", note.c_str());
+    if (sharedData.droppedOutOfRangeTasks > 0) {
+        ImGui::TextColored(
+            ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+            "Label Studio ignored the date filter: downloading every task and filtering locally (%d skipped so far).",
+            sharedData.droppedOutOfRangeTasks);
+    }
+}
 
 void drawLabelStudioSessionSummary(
     const LabelStudioSessionState& session, const std::function<void()>& onOpenLabelStudioWindow) {
@@ -31,8 +46,41 @@ void drawLabelStudioSessionSummary(
 
 namespace {
 
-// Content for the Connection tab: base URL/token, Connect, project list.
-void drawConnectionTabContent(LabelStudioSessionState& session) {
+// The import-date range pickers. They edit pendingImportDateRange;
+// "Apply range" (or picking a project below) makes it the range every
+// load uses. Placed above the project list so a range can be chosen
+// before the automatic load on project select starts.
+void drawImportDateRangeControls(SharedLabelStudioProjectData& sharedData, const LabelStudioSessionState& session) {
+    ImGui::SeparatorText("Import date range");
+    TaskImportDateRange& pending = sharedData.pendingImportDateRange;
+    DatePickerButton("Imported from", pending.from);
+    ImGui::SameLine();
+    DatePickerButton("Imported to", pending.to);
+
+    const bool valid = isValidTaskImportDateRange(pending);
+    const bool hasChanges = pending != sharedData.appliedImportDateRange;
+    ImGui::BeginDisabled(!valid || !hasChanges);
+    if (ImGui::Button("Apply range")) {
+        if (setSharedTaskImportDateRange(sharedData, pending)) {
+            // No-op until a project is selected and its config has loaded.
+            refreshSharedLabelStudioProjectData(sharedData, session);
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (!valid) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "\"Imported from\" is after \"Imported to\".");
+    } else if (hasChanges) {
+        ImGui::TextDisabled("(not applied yet)");
+    } else {
+        const std::string note = describeTaskImportDateRange(sharedData.appliedImportDateRange);
+        ImGui::TextDisabled("%s", note.empty() ? "Whole project (no date limit)" : note.c_str());
+    }
+}
+
+// Content for the Connection tab: base URL/token, Connect, import date
+// range, project list.
+void drawConnectionTabContent(LabelStudioSessionState& session, SharedLabelStudioProjectData& sharedData) {
     ImGui::InputText("Base URL", &session.baseUrl);
     ImGui::InputText("API Token", &session.apiToken, ImGuiInputTextFlags_Password);
 
@@ -56,12 +104,22 @@ void drawConnectionTabContent(LabelStudioSessionState& session) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", session.error.c_str());
             break;
         case LabelStudioSessionStatus::Connected: {
+            drawImportDateRangeControls(sharedData, session);
+            ImGui::Separator();
             ImGui::Text("Connected. %zu project(s):", session.projects.size());
             ImGui::BeginChild("LabelStudioProjectList", ImVec2(0, 200.0f), true);
             for (const auto& project : session.projects) {
                 const bool isActive = project.id == session.activeProjectId;
                 const std::string label = project.title + " (id " + std::to_string(project.id) + ")";
                 if (ImGui::Selectable(label.c_str(), isActive)) {
+                    // A range picked but not yet applied still counts for the
+                    // load this selection triggers.
+                    // A different project reloads on its own (updateSharedLabelStudioProjectData
+                    // sees the key change); re-clicking the active one has to reload explicitly.
+                    if (isValidTaskImportDateRange(sharedData.pendingImportDateRange)
+                        && setSharedTaskImportDateRange(sharedData, sharedData.pendingImportDateRange) && isActive) {
+                        refreshSharedLabelStudioProjectData(sharedData, session);
+                    }
                     session.activeProjectId = project.id;
                     session.activeProjectTitle = project.title;
                 }
@@ -106,7 +164,7 @@ void drawLabelStudioWindow(AppUi& ui) {
             connectionFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Connection", nullptr, connectionFlags)) {
-            drawConnectionTabContent(ui.labelStudioSession);
+            drawConnectionTabContent(ui.labelStudioSession, ui.labelStudioProjectData);
             ImGui::EndTabItem();
         }
 

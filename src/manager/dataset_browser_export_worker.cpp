@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 
 namespace {
 constexpr size_t kMaxSampleErrors = 5;
@@ -21,6 +22,7 @@ void DatasetExportWorker::start(DatasetExportConfig config) {
         thread_.join();
     }
     cancelRequested_.store(false);
+    phase_.store(static_cast<int>(DatasetExportPhase::FetchingTasks));
     completed_.store(0);
     total_.store(0);
     {
@@ -36,7 +38,7 @@ void DatasetExportWorker::requestCancel() {
 }
 
 DatasetExportProgress DatasetExportWorker::progress() const {
-    return DatasetExportProgress{completed_.load(), total_.load()};
+    return DatasetExportProgress{static_cast<DatasetExportPhase>(phase_.load()), completed_.load(), total_.load()};
 }
 
 bool DatasetExportWorker::tryTakeResult(DatasetExportResult& out) {
@@ -58,6 +60,58 @@ void DatasetExportWorker::finish(DatasetExportResult result) {
 
 void DatasetExportWorker::run(DatasetExportConfig config) {
     DatasetExportResult result;
+
+    const std::filesystem::path finalPath = std::filesystem::path(config.destinationFolder) / "export.json";
+    const std::filesystem::path partialPath = std::filesystem::path(config.destinationFolder) / "export.json.partial";
+    {
+        std::ofstream file(partialPath);
+        if (!file) {
+            result.exportJsonError = "Could not write " + partialPath.string();
+            finish(std::move(result));
+            return;
+        }
+        std::unordered_set<int> remainingIds(config.matchingTaskIds.begin(), config.matchingTaskIds.end());
+        bool wroteAny = false;
+        file << "[\n";
+        std::string fetchError;
+        const LabelStudioPagedFetchOutcome outcome = forEachLabelStudioTaskPage(
+            config.baseUrl, config.projectId, config.apiToken,
+            [&](const nlohmann::json& pageTasks, const LabelStudioTaskPageProgress& progress) {
+                writeMatchingTasksAsJsonArrayElements(pageTasks, remainingIds, file, wroteAny);
+                completed_.store(progress.fetchedTasks);
+                total_.store(progress.totalTasks.value_or(0));
+                return static_cast<bool>(file);
+            },
+            &cancelRequested_, fetchError, config.createdAtBounds);
+        file << "\n]\n";
+        file.close();
+
+        // Cancelled without a cancel request means the callback stopped
+        // the fetch because the file stream failed -- a write error.
+        if (outcome == LabelStudioPagedFetchOutcome::Cancelled && cancelRequested_.load()) {
+            result.cancelled = true;
+            finish(std::move(result));
+            return;
+        }
+        if (outcome != LabelStudioPagedFetchOutcome::Completed || !file) {
+            result.exportJsonError = outcome == LabelStudioPagedFetchOutcome::Failed
+                ? "Fetching task data for export.json failed: " + fetchError
+                : "Could not write " + partialPath.string();
+            finish(std::move(result));
+            return;
+        }
+        std::error_code renameError;
+        std::filesystem::rename(partialPath, finalPath, renameError);
+        if (renameError) {
+            result.exportJsonError = "Could not rename export.json.partial: " + renameError.message();
+            finish(std::move(result));
+            return;
+        }
+        result.exportJsonWritten = true;
+    }
+
+    phase_.store(static_cast<int>(DatasetExportPhase::DownloadingImages));
+    completed_.store(0);
     const int total = static_cast<int>(config.tasksToExport.size());
     total_.store(total);
     int completed = 0;
@@ -84,16 +138,6 @@ void DatasetExportWorker::run(DatasetExportConfig config) {
 
         completed++;
         completed_.store(completed);
-    }
-
-    const std::string exportJsonPath = (std::filesystem::path(config.destinationFolder) / "export.json").string();
-    std::ofstream file(exportJsonPath);
-    if (file) {
-        file << config.exportJson.dump(2);
-        result.exportJsonWritten = static_cast<bool>(file);
-    }
-    if (!result.exportJsonWritten) {
-        result.exportJsonError = "Could not write export.json to " + config.destinationFolder;
     }
 
     finish(std::move(result));

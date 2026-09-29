@@ -152,7 +152,7 @@ void drawTimestampSearchTabContent(
     ImGui::EndDisabled();
     if (sharedData.loading) {
         ImGui::SameLine();
-        ImGui::TextDisabled("Loading...");
+        ImGui::TextDisabled("%s", describeSharedTaskListLoadProgress(sharedData).c_str());
     } else if (!sharedData.error.empty()) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sharedData.error.c_str());
@@ -160,6 +160,7 @@ void drawTimestampSearchTabContent(
         ImGui::SameLine();
         ImGui::TextDisabled("%zu task(s) loaded", sharedData.summaries.size());
     }
+    drawSharedTaskRangeNote(sharedData);
 
     ImGui::Separator();
     drawEntryList(state);

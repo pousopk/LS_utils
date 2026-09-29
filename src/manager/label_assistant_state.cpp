@@ -50,7 +50,7 @@ void startLabelAssistantRun(
 
         config.labelStudioBaseUrl = session.baseUrl;
         config.labelStudioApiToken = session.apiToken;
-        config.unlabeledTasks = selectUnlabeledTasks(sharedData.rawTasksJson, sharedData.projectConfig.dataImageKey);
+        config.unlabeledTasks = selectUnlabeledFromSummaries(sharedData.summaries);
         config.scratchFolderPath = scratchFolder;
         state.imageFolderPath = scratchFolder;
     } else {

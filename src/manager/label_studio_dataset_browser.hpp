@@ -5,9 +5,12 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // One task's browsing-relevant summary, extracted from a Label Studio
@@ -22,6 +25,7 @@ struct DatasetTaskSummary {
     std::vector<std::string> classNames;    // every class name in any annotation/prediction result, deduplicated and sorted
     std::optional<float> minConfidence;     // lowest predictions[i].score present; unset if no prediction has a numeric score
     std::optional<float> maxConfidence;     // highest predictions[i].score present; unset if no prediction has a numeric score
+    std::string createdAt;                  // task.created_at verbatim (ISO-8601 UTC); empty if missing or not a string
 };
 
 // Pure function: parses a Label Studio tasks-list API response (bare
@@ -74,6 +78,25 @@ std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summa
 // `matchingTaskIds` not found in `allTasksRaw` are silently skipped
 // (defensive; shouldn't happen since both come from the same fetch).
 nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds);
+
+// Pure function (apart from writing to `out`): the streaming counterpart
+// to buildDatasetExportJson, for building export.json one fetched page
+// at a time instead of from the whole project held in memory. Writes
+// every task in `pageTasks` (bare array or an object wrapping "tasks",
+// same tolerance as buildDatasetExportJson) whose id is still in
+// `remainingTaskIds` to `out` as an unmodified JSON array element, and
+// erases that id -- so a task re-delivered on a later page (offset
+// pagination shifting while tasks are added during a long export) is
+// written only once --
+// dump(2), preceded by ",\n" unless it's the first element written, as
+// tracked across calls by `wroteAnyElement`. The caller writes "[\n"
+// before the first page and "\n]\n" after the last, so tasks keep
+// their fetch order and the result is the same shape
+// parseLabelStudioExport/loadLabelStudioExport already read. Returns how
+// many tasks were written by this call.
+size_t writeMatchingTasksAsJsonArrayElements(
+    const nlohmann::json& pageTasks, std::unordered_set<int>& remainingTaskIds, std::ostream& out,
+    bool& wroteAnyElement);
 
 // Kept separate (rather than one merged list) so callers can pick just
 // one -- the Dataset Browser only ever bakes annotations *or*
@@ -134,6 +157,41 @@ std::unordered_map<int, DatasetBoxesToDraw> buildBoxesByTaskId(
 // Same one-pass-instead-of-per-lookup idea as buildBoxesByTaskId, for masksToDrawForTask.
 std::unordered_map<int, DatasetMasksToDraw> buildMasksByTaskId(
     const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName);
+
+// One brush mask kept in Label Studio's own RLE encoding rather than
+// decoded. A decoded mask is a full-resolution CV_8UC1 (~2MB at 1080p),
+// so decoding every task's masks up front -- what buildMasksByTaskId
+// does -- grows without bound with project size; the encoded RLE is
+// typically a few KB, and decodeDatasetMasks turns it into pixels only
+// for the thumbnails actually being built.
+struct DatasetEncodedMask {
+    std::vector<uint8_t> rle;   // Label Studio brush RLE bytes, as in value.rle
+    int width = 0;              // original_width
+    int height = 0;             // original_height
+    std::string className;      // value.brushlabels[0]
+};
+
+// Same annotation/prediction split as DatasetMasksToDraw, still encoded.
+struct DatasetEncodedMasks {
+    std::vector<DatasetEncodedMask> annotationMasks;
+    std::vector<DatasetEncodedMask> predictionMasks;
+};
+
+// Pure function: one pass over `tasksJson` (a full task list or a single
+// page of one -- same response-shape tolerance as buildMasksByTaskId),
+// collecting each task's brush masks without decoding them. Accepts
+// exactly the result items parseBrushResultRegions would, except that an
+// item whose rle holds a value outside 0..255 is skipped instead of
+// decoded into garbage. Unlike buildMasksByTaskId, only tasks that
+// actually have at least one mask get an entry -- callers already treat
+// a missing entry as "nothing to draw". Returns an empty map if
+// `brushLabelsFromName` is empty.
+std::unordered_map<int, DatasetEncodedMasks> buildEncodedMasksByTaskId(
+    const nlohmann::json& tasksJson, const std::string& brushLabelsFromName);
+
+// Pure function: decodes each of `masks` via decodeLabelStudioRleToMask,
+// in order -- the lazy counterpart to buildEncodedMasksByTaskId.
+std::vector<DraftBrushRegion> decodeDatasetMasks(const std::vector<DatasetEncodedMask>& masks);
 
 // Pure function: builds a taskId -> index-into-`summaries` lookup, so
 // repeated per-task summary lookups don't need a linear scan over the

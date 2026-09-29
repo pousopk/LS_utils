@@ -1,19 +1,145 @@
 #include "manager/label_studio_project_data.hpp"
 
-void applySharedTaskListResult(SharedLabelStudioProjectData& state, const DatasetTaskListResult& result) {
+namespace {
+
+void clearLiveTaskData(SharedLabelStudioProjectData& state) {
+    state.summaries.clear();
+    state.summaryIndexByTaskId.clear();
+    state.boxesByTaskId.clear();
+    state.masksByTaskId.clear();
+}
+
+// Appends `page` into the given containers, skipping any task id already indexed.
+void appendPage(
+    DatasetTaskListPage& page, std::vector<DatasetTaskSummary>& summaries,
+    std::unordered_map<int, size_t>& summaryIndexByTaskId,
+    std::unordered_map<int, DatasetBoxesToDraw>& boxesByTaskId,
+    std::unordered_map<int, DatasetEncodedMasks>& masksByTaskId) {
+    for (auto& summary : page.summaries) {
+        const int taskId = summary.taskId;
+        if (summaryIndexByTaskId.count(taskId) != 0) {
+            continue;
+        }
+        summaryIndexByTaskId[taskId] = summaries.size();
+        summaries.push_back(std::move(summary));
+        if (auto boxesIt = page.boxesByTaskId.find(taskId); boxesIt != page.boxesByTaskId.end()) {
+            boxesByTaskId[taskId] = std::move(boxesIt->second);
+        }
+        if (auto masksIt = page.masksByTaskId.find(taskId); masksIt != page.masksByTaskId.end()) {
+            masksByTaskId[taskId] = std::move(masksIt->second);
+        }
+    }
+}
+
+std::string describeStoppedLoad(const SharedLabelStudioProjectData& state, const std::string& reason) {
+    std::string text = "Loaded " + std::to_string(state.summaries.size());
+    if (state.loadProgress.totalTasks) {
+        text += " of " + std::to_string(*state.loadProgress.totalTasks);
+    }
+    return text + " tasks, then: " + reason;
+}
+
+} // namespace
+
+bool isValidTaskImportDateRange(const TaskImportDateRange& range) {
+    return !(range.from && range.to && *range.to < *range.from);
+}
+
+TaskCreatedAtBounds toCreatedAtBounds(const TaskImportDateRange& range) {
+    TaskCreatedAtBounds bounds;
+    if (range.from) {
+        bounds.fromInclusive = localMidnight(*range.from);
+    }
+    if (range.to) {
+        bounds.toExclusive = localMidnight(nextDay(*range.to));
+    }
+    return bounds;
+}
+
+std::string describeTaskImportDateRange(const TaskImportDateRange& range) {
+    if (range.from && range.to) {
+        return "Tasks imported " + formatCalendarDate(*range.from) + " - " + formatCalendarDate(*range.to);
+    }
+    if (range.from) {
+        return "Tasks imported from " + formatCalendarDate(*range.from);
+    }
+    if (range.to) {
+        return "Tasks imported up to " + formatCalendarDate(*range.to);
+    }
+    return "";
+}
+
+bool setSharedTaskImportDateRange(SharedLabelStudioProjectData& state, const TaskImportDateRange& range) {
+    if (range == state.appliedImportDateRange) {
+        return false;
+    }
+    state.worker.stop();
+    state.appliedImportDateRange = range;
+    clearLiveTaskData(state);
+    state.staging = SharedTaskListStaging{};
+    state.loaded = false;
     state.loading = false;
-    if (!result.success) {
-        state.error = result.error;
+    state.droppedOutOfRangeTasks = 0;
+    state.version++;
+    return true;
+}
+
+void beginSharedTaskListLoad(SharedLabelStudioProjectData& state) {
+    state.streamingIntoLive = !state.loaded;
+    if (state.streamingIntoLive && !state.summaries.empty()) {
+        clearLiveTaskData(state);
+        state.version++;   // consumers must drop views built from the discarded partial list
+    }
+    state.staging = SharedTaskListStaging{};
+    state.loadProgress = DatasetTaskListProgress{};
+    state.droppedOutOfRangeTasks = 0;
+    state.error.clear();
+    state.loading = true;
+}
+
+void applySharedTaskListPage(SharedLabelStudioProjectData& state, DatasetTaskListPage page) {
+    state.droppedOutOfRangeTasks += page.droppedOutOfRange;
+    if (state.streamingIntoLive) {
+        appendPage(page, state.summaries, state.summaryIndexByTaskId, state.boxesByTaskId, state.masksByTaskId);
+        state.version++;
+    } else {
+        appendPage(
+            page, state.staging.summaries, state.staging.summaryIndexByTaskId, state.staging.boxesByTaskId,
+            state.staging.masksByTaskId);
+    }
+}
+
+void applySharedTaskListCompletion(SharedLabelStudioProjectData& state, const DatasetTaskListCompletion& completion) {
+    state.loading = false;
+    if (completion.outcome == DatasetTaskListOutcome::Completed) {
+        if (!state.streamingIntoLive) {
+            state.summaries = std::move(state.staging.summaries);
+            state.summaryIndexByTaskId = std::move(state.staging.summaryIndexByTaskId);
+            state.boxesByTaskId = std::move(state.staging.boxesByTaskId);
+            state.masksByTaskId = std::move(state.staging.masksByTaskId);
+            state.version++;
+        }
+        state.staging = SharedTaskListStaging{};
+        state.error.clear();
+        state.loaded = true;
         return;
     }
-    state.error.clear();
-    state.rawTasksJson = result.rawTasksJson;
-    state.summaries = result.summaries;
-    state.summaryIndexByTaskId = result.summaryIndexByTaskId;
-    state.boxesByTaskId = result.boxesByTaskId;
-    state.masksByTaskId = result.masksByTaskId;
-    state.loaded = true;
-    state.version++;
+
+    const std::string reason = completion.outcome == DatasetTaskListOutcome::Cancelled ? "cancelled" : completion.error;
+    if (state.streamingIntoLive) {
+        state.error = describeStoppedLoad(state, reason);
+    } else {
+        state.error = "Refresh failed (showing previous list): " + reason;
+    }
+    state.staging = SharedTaskListStaging{};
+}
+
+std::string describeSharedTaskListLoadProgress(const SharedLabelStudioProjectData& state) {
+    std::string text = "Loading tasks... " + std::to_string(state.loadProgress.fetchedTasks);
+    if (state.loadProgress.totalTasks) {
+        text += " / " + std::to_string(*state.loadProgress.totalTasks);
+    }
+    return text;
 }
 
 void applySharedProjectConfigResult(SharedLabelStudioProjectData& state, const LabelStudioProjectConfig& config) {
@@ -46,12 +172,11 @@ void updateSharedLabelStudioProjectData(SharedLabelStudioProjectData& state, con
         const std::string key = buildSharedFetchKey(session);
         if (key != state.lastFetchKey) {
             state.lastFetchKey = key;
+            state.worker.stop();
             state.loaded = false;
-            state.rawTasksJson = nlohmann::json::array();
-            state.summaries.clear();
-            state.summaryIndexByTaskId.clear();
-            state.boxesByTaskId.clear();
-            state.masksByTaskId.clear();
+            state.loading = false;
+            clearLiveTaskData(state);
+            state.staging = SharedTaskListStaging{};
             // Reset projectConfig too, not just the task list -- a project
             // switch whose config fetch then fails must not go on showing
             // the PREVIOUS project's control tags/dataImageKey (that would
@@ -73,9 +198,16 @@ void updateSharedLabelStudioProjectData(SharedLabelStudioProjectData& state, con
         }
     }
 
-    DatasetTaskListResult result;
-    if (state.worker.tryTakeResult(result)) {
-        applySharedTaskListResult(state, result);
+    if (state.loading) {
+        state.loadProgress = state.worker.progress();
+    }
+    DatasetTaskListPoll poll;
+    state.worker.poll(poll);
+    for (auto& page : poll.pages) {
+        applySharedTaskListPage(state, std::move(page));
+    }
+    if (poll.completion) {
+        applySharedTaskListCompletion(state, *poll.completion);
     }
 }
 
@@ -91,8 +223,8 @@ void refreshSharedLabelStudioProjectData(SharedLabelStudioProjectData& state, co
     config.dataImageKey = state.projectConfig.dataImageKey;
     config.rectangleLabelsFromName = state.rectangleLabelsFromName;
     config.brushLabelsFromName = state.brushLabelsFromName;
+    config.createdAtBounds = toCreatedAtBounds(state.appliedImportDateRange);
 
-    state.error.clear();
+    beginSharedTaskListLoad(state);
     state.worker.start(std::move(config));
-    state.loading = true;
 }

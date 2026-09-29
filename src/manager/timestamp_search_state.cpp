@@ -76,8 +76,7 @@ void startTimestampSearch(
     state.resultError.clear();
     state.lastSearchedEntries = std::move(searchedEntries);
 
-    state.lastPerQueryMatches =
-        matchTasksToTimestamps(sharedData.rawTasksJson, sharedData.projectConfig.dataImageKey, queries);
+    state.lastPerQueryMatches = matchSummariesToTimestamps(sharedData.summaries, queries);
     const std::vector<TimestampMatchCandidate> candidates = dedupTimestampMatchCandidates(state.lastPerQueryMatches);
 
     const std::string scratchFolder = timestampSearchScratchFolder();

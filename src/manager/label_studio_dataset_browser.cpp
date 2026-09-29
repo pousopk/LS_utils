@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <ostream>
 
 namespace {
 
@@ -124,6 +125,9 @@ std::vector<DatasetTaskSummary> summarizeDatasetTasks(
         DatasetTaskSummary summary;
         summary.taskId = task["id"].get<int>();
         summary.imagePath = task["data"][dataImageKey].get<std::string>();
+        if (task.contains("created_at") && task["created_at"].is_string()) {
+            summary.createdAt = task["created_at"].get<std::string>();
+        }
 
         if (task.contains("total_annotations") && task["total_annotations"].is_number_integer()) {
             summary.hasAnnotation = task["total_annotations"].get<int>() > 0;
@@ -295,6 +299,137 @@ std::unordered_map<int, DatasetMasksToDraw> buildMasksByTaskId(
         result[task["id"].get<int>()] = extractMasksFromTaskJson(task, brushLabelsFromName);
     }
     return result;
+}
+
+namespace {
+
+// Same acceptance rules as parseBrushResultRegions (label_studio_import.cpp),
+// plus: an rle value outside 0..255, a non-integer or non-positive
+// dimension, or a non-string class name skips that item -- one malformed
+// item among 100k+ tasks must not throw out of the worker thread.
+void collectEncodedBrushMasks(
+    const nlohmann::json& resultArray, const std::string& brushLabelsFromName, std::vector<DatasetEncodedMask>& out) {
+    if (!resultArray.is_array()) {
+        return;
+    }
+    for (const auto& item : resultArray) {
+        if (!item.contains("type") || item["type"] != "brushlabels") {
+            continue;
+        }
+        if (!item.contains("from_name") || item["from_name"] != brushLabelsFromName) {
+            continue;
+        }
+        if (!item.contains("value") || !item["value"].contains("rle") || !item["value"]["rle"].is_array()) {
+            continue;
+        }
+        if (!item.contains("original_width") || !item["original_width"].is_number_integer()
+            || item["original_width"].get<int>() <= 0 || !item.contains("original_height")
+            || !item["original_height"].is_number_integer() || item["original_height"].get<int>() <= 0) {
+            continue;
+        }
+        if (!item["value"].contains("brushlabels") || !item["value"]["brushlabels"].is_array()
+            || item["value"]["brushlabels"].empty() || !item["value"]["brushlabels"][0].is_string()) {
+            continue;
+        }
+
+        DatasetEncodedMask mask;
+        mask.width = item["original_width"].get<int>();
+        mask.height = item["original_height"].get<int>();
+        mask.className = item["value"]["brushlabels"][0].get<std::string>();
+        mask.rle.reserve(item["value"]["rle"].size());
+        bool valid = true;
+        for (const auto& byteValue : item["value"]["rle"]) {
+            if (!byteValue.is_number_integer() || byteValue.get<int>() < 0 || byteValue.get<int>() > 255) {
+                valid = false;
+                break;
+            }
+            mask.rle.push_back(static_cast<uint8_t>(byteValue.get<int>()));
+        }
+        if (valid) {
+            out.push_back(std::move(mask));
+        }
+    }
+}
+
+DatasetEncodedMasks extractEncodedMasksFromTaskJson(const nlohmann::json& task, const std::string& brushLabelsFromName) {
+    DatasetEncodedMasks out;
+    if (task.contains("annotations") && task["annotations"].is_array()) {
+        for (const auto& annotation : task["annotations"]) {
+            if (annotation.is_object() && annotation.contains("result")) {
+                collectEncodedBrushMasks(annotation["result"], brushLabelsFromName, out.annotationMasks);
+            }
+        }
+    }
+    if (task.contains("predictions") && task["predictions"].is_array()) {
+        for (const auto& prediction : task["predictions"]) {
+            if (prediction.is_object() && prediction.contains("result")) {
+                collectEncodedBrushMasks(prediction["result"], brushLabelsFromName, out.predictionMasks);
+            }
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+std::unordered_map<int, DatasetEncodedMasks> buildEncodedMasksByTaskId(
+    const nlohmann::json& tasksJson, const std::string& brushLabelsFromName) {
+    std::unordered_map<int, DatasetEncodedMasks> result;
+    if (brushLabelsFromName.empty()) {
+        return result;
+    }
+    const nlohmann::json* tasks = resolveTaskArray(tasksJson);
+    if (tasks == nullptr) {
+        return result;
+    }
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        DatasetEncodedMasks masks = extractEncodedMasksFromTaskJson(task, brushLabelsFromName);
+        if (!masks.annotationMasks.empty() || !masks.predictionMasks.empty()) {
+            result[task["id"].get<int>()] = std::move(masks);
+        }
+    }
+    return result;
+}
+
+std::vector<DraftBrushRegion> decodeDatasetMasks(const std::vector<DatasetEncodedMask>& masks) {
+    std::vector<DraftBrushRegion> regions;
+    regions.reserve(masks.size());
+    for (const auto& encoded : masks) {
+        const std::vector<int> rle(encoded.rle.begin(), encoded.rle.end());
+        DraftBrushRegion region;
+        region.mask = decodeLabelStudioRleToMask(rle, encoded.width, encoded.height);
+        region.className = encoded.className;
+        regions.push_back(std::move(region));
+    }
+    return regions;
+}
+
+size_t writeMatchingTasksAsJsonArrayElements(
+    const nlohmann::json& pageTasks, std::unordered_set<int>& remainingTaskIds, std::ostream& out,
+    bool& wroteAnyElement) {
+    const nlohmann::json* tasks = resolveTaskArray(pageTasks);
+    if (tasks == nullptr) {
+        return 0;
+    }
+    size_t written = 0;
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        if (remainingTaskIds.erase(task["id"].get<int>()) == 0) {
+            continue;
+        }
+        if (wroteAnyElement) {
+            out << ",\n";
+        }
+        out << task.dump(2);
+        wroteAnyElement = true;
+        written++;
+    }
+    return written;
 }
 
 std::unordered_map<int, size_t> indexSummariesByTaskId(const std::vector<DatasetTaskSummary>& summaries) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/label_studio_dataset_browser.hpp"
 #include "manager/label_studio_import.hpp"
 
 #include <opencv2/core.hpp>
@@ -36,8 +37,11 @@ struct DatasetThumbnailRequest {
     // BrushLabels tag or this task has no boxes/masks of that kind.
     // Masks are composited first, boxes drawn on top, so a box's
     // outline and label stay legible against the mask's color wash.
+    // Masks arrive still RLE-encoded (see DatasetEncodedMask); run()
+    // decodes them on this worker thread, only for thumbnails it
+    // actually builds.
     std::vector<DraftDetectionBox> boxesToDraw;
-    std::vector<DraftBrushRegion> masksToDraw;
+    std::vector<DatasetEncodedMask> masksToDraw;
 };
 
 struct DatasetThumbnailResult {

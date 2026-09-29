@@ -5,13 +5,16 @@
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <regex>
 #include <sstream>
+#include <thread>
 
 namespace {
 
@@ -33,9 +36,16 @@ std::string normalizeBaseUrl(const std::string& baseUrl) {
 // `networkError` set -- a non-2xx response is still a "successful"
 // request as far as this function is concerned; the caller checks
 // `httpCode` itself.
+// curl transfer-progress callback: returning non-zero aborts the
+// transfer, which is how a cancel reaches a request already in flight.
+int abortTransferIfCancelled(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    const auto* cancelRequested = static_cast<const std::atomic<bool>*>(clientp);
+    return (cancelRequested != nullptr && cancelRequested->load()) ? 1 : 0;
+}
+
 bool performGet(
     const std::string& url, const std::string& apiToken, std::string& responseBody, long& httpCode,
-    std::string& networkError) {
+    std::string& networkError, long timeoutSeconds = 30, const std::atomic<bool>* cancelRequested = nullptr) {
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
         networkError = "Failed to initialize HTTP client";
@@ -50,7 +60,12 @@ bool performGet(
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSeconds);
+    if (cancelRequested != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abortTransferIfCancelled);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, const_cast<std::atomic<bool>*>(cancelRequested));
+    }
 
     const CURLcode res = curl_easy_perform(curl);
     bool ok = true;
@@ -621,6 +636,50 @@ std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     return result;
 }
 
+std::vector<std::vector<TimestampMatchCandidate>> matchSummariesToTimestamps(
+    const std::vector<DatasetTaskSummary>& summaries, const std::vector<TimestampMatchQuery>& queries) {
+    std::vector<std::vector<TimestampMatchCandidate>> result(queries.size());
+    for (const auto& summary : summaries) {
+        const std::optional<std::time_t> createdAt = parseIso8601Utc(summary.createdAt);
+        if (!createdAt) {
+            continue;
+        }
+        TimestampMatchCandidate base;
+        base.taskId = summary.taskId;
+        base.imagePath = summary.imagePath;
+        base.createdAt = *createdAt;
+        for (size_t i = 0; i < queries.size(); ++i) {
+            const long long delta =
+                static_cast<long long>(*createdAt) - static_cast<long long>(queries[i].timestamp);
+            if (std::llabs(delta) > queries[i].toleranceSeconds) {
+                continue;
+            }
+            TimestampMatchCandidate candidate = base;
+            candidate.deltaSeconds = delta;
+            result[i].push_back(candidate);
+        }
+    }
+    for (auto& candidates : result) {
+        std::sort(
+            candidates.begin(), candidates.end(),
+            [](const TimestampMatchCandidate& a, const TimestampMatchCandidate& b) {
+                return std::llabs(a.deltaSeconds) < std::llabs(b.deltaSeconds);
+            });
+    }
+    return result;
+}
+
+std::vector<LabelStudioUnlabeledTask> selectUnlabeledFromSummaries(const std::vector<DatasetTaskSummary>& summaries) {
+    std::vector<LabelStudioUnlabeledTask> result;
+    for (const auto& summary : summaries) {
+        if (summary.hasAnnotation || summary.hasPrediction) {
+            continue;
+        }
+        result.push_back(LabelStudioUnlabeledTask{summary.taskId, summary.imagePath});
+    }
+    return result;
+}
+
 std::optional<int> parseTaskIdFromFilename(const std::string& filename) {
     const std::string stem = std::filesystem::path(filename).stem().string();
     if (stem.empty()) {
@@ -742,67 +801,217 @@ bool createLabelStudioPredictionInternal(
 
 } // namespace
 
-// Fetches every task in the project (with predictions embedded, via Label
-// Studio's `fields=all` query param), paging via
-// shouldFetchNextLabelStudioPage until it says to stop. Handles a
-// bare-array response, or an object with a "tasks" or "results" array --
-// Label Studio's exact response shape here isn't pinned to one version.
-// Capped at 1000 pages as a safety valve against an unexpected server
-// response looping forever. Exposed (not file-local) since the Dataset
-// Browser needs the raw task list directly, not just one of the
-// higher-level summaries/downloads built on top of it below.
-bool fetchAllLabelStudioTasksRaw(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
-    std::string& error) {
-    allTasks = nlohmann::json::array();
-    const int pageSize = 200;
+std::string formatIso8601Utc(std::time_t t) {
+    std::tm utc{};
+    gmtime_r(&t, &utc);
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S.000Z", &utc);
+    return buffer;
+}
 
-    for (int page = 1; page <= 1000; ++page) {
+std::string percentEncodeQueryValue(const std::string& value) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(value.size() * 3);
+    for (const unsigned char c : value) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[c >> 4]);
+            out.push_back(kHex[c & 0x0F]);
+        }
+    }
+    return out;
+}
+
+std::string buildLabelStudioCreatedAtQuery(const TaskCreatedAtBounds& bounds) {
+    if (bounds.unbounded()) {
+        return "";
+    }
+    nlohmann::json items = nlohmann::json::array();
+    if (bounds.fromInclusive) {
+        items.push_back({{"filter", "filter:tasks:created_at"}, {"operator", "greater_or_equal"}, {"type", "Datetime"},
+                         {"value", formatIso8601Utc(*bounds.fromInclusive)}});
+    }
+    if (bounds.toExclusive) {
+        items.push_back({{"filter", "filter:tasks:created_at"}, {"operator", "less"}, {"type", "Datetime"},
+                         {"value", formatIso8601Utc(*bounds.toExclusive)}});
+    }
+    const nlohmann::json query = {{"filters", {{"conjunction", "and"}, {"items", items}}}};
+    return query.dump();
+}
+
+bool isTaskCreatedWithin(const std::string& createdAt, const TaskCreatedAtBounds& bounds) {
+    if (bounds.unbounded()) {
+        return true;
+    }
+    const std::optional<std::time_t> created = parseIso8601Utc(createdAt);
+    if (!created) {
+        return false;
+    }
+    if (bounds.fromInclusive && *created < *bounds.fromInclusive) {
+        return false;
+    }
+    if (bounds.toExclusive && *created >= *bounds.toExclusive) {
+        return false;
+    }
+    return true;
+}
+
+LabelStudioTaskPage parseLabelStudioTaskPage(const nlohmann::json& parsedPage) {
+    LabelStudioTaskPage page;
+    if (parsedPage.is_array()) {
+        page.tasks = &parsedPage;
+        return page;
+    }
+    if (!parsedPage.is_object()) {
+        return page;
+    }
+    if (parsedPage.contains("tasks") && parsedPage["tasks"].is_array()) {
+        page.tasks = &parsedPage["tasks"];
+    } else if (parsedPage.contains("results") && parsedPage["results"].is_array()) {
+        page.tasks = &parsedPage["results"];
+    }
+    if (parsedPage.contains("total") && parsedPage["total"].is_number_integer()) {
+        page.total = parsedPage["total"].get<int>();
+    }
+    return page;
+}
+
+bool isRetryableLabelStudioFailure(bool requestFailed, long httpCode) {
+    return requestFailed || httpCode == 429 || (httpCode >= 500 && httpCode < 600);
+}
+
+LabelStudioTaskPageAction nextLabelStudioTaskPageAction(
+    const nlohmann::json& parsedPage, size_t pageItemCount, int pageSize, const LabelStudioTaskPageProgress& progress,
+    int page, int maxPages) {
+    if (progress.totalTasks && progress.fetchedTasks >= *progress.totalTasks) {
+        return LabelStudioTaskPageAction::Done;
+    }
+    if (!shouldFetchNextLabelStudioPage(parsedPage, pageItemCount, pageSize)) {
+        return LabelStudioTaskPageAction::Done;
+    }
+    return page >= maxPages ? LabelStudioTaskPageAction::HitPageCap : LabelStudioTaskPageAction::FetchNext;
+}
+
+namespace {
+
+constexpr int kTaskPageSize = 200;
+constexpr int kMaxTaskPages = 1000;
+constexpr int kMaxPageAttempts = 3;
+constexpr long kTaskPageTimeoutSeconds = 120;
+
+bool isCancelled(const std::atomic<bool>* cancelRequested) {
+    return cancelRequested != nullptr && cancelRequested->load();
+}
+
+// Sleeps `seconds` in 100ms slices, returning false early if cancelled.
+bool sleepUnlessCancelled(int seconds, const std::atomic<bool>* cancelRequested) {
+    for (int i = 0; i < seconds * 10; ++i) {
+        if (isCancelled(cancelRequested)) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return !isCancelled(cancelRequested);
+}
+
+} // namespace
+
+LabelStudioPagedFetchOutcome forEachLabelStudioTaskPage(
+    const std::string& baseUrl, int projectId, const std::string& apiToken,
+    const LabelStudioTaskPageCallback& onPage, const std::atomic<bool>* cancelRequested, std::string& error,
+    const TaskCreatedAtBounds& createdAtBounds) {
+    LabelStudioTaskPageProgress progress;
+    const std::string createdAtQuery = buildLabelStudioCreatedAtQuery(createdAtBounds);
+    const std::string queryParam = createdAtQuery.empty() ? "" : "&query=" + percentEncodeQueryValue(createdAtQuery);
+    for (int page = 1; page <= kMaxTaskPages; ++page) {
         const std::string url = normalizeBaseUrl(baseUrl) + "/api/tasks/?project=" + std::to_string(projectId)
-            + "&fields=all&page=" + std::to_string(page) + "&page_size=" + std::to_string(pageSize);
+            + "&fields=all&page=" + std::to_string(page) + "&page_size=" + std::to_string(kTaskPageSize)
+            + queryParam;
 
         std::string responseBody;
         long httpCode = 0;
-        std::string networkError;
-        if (!performGet(url, apiToken, responseBody, httpCode, networkError)) {
-            error = networkError;
-            return false;
-        }
-        if (httpCode < 200 || httpCode >= 300) {
-            error = "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody;
-            return false;
+        for (int attempt = 1; attempt <= kMaxPageAttempts; ++attempt) {
+            if (isCancelled(cancelRequested)) {
+                return LabelStudioPagedFetchOutcome::Cancelled;
+            }
+            responseBody.clear();
+            httpCode = 0;
+            std::string networkError;
+            const bool requestOk = performGet(
+                url, apiToken, responseBody, httpCode, networkError, kTaskPageTimeoutSeconds, cancelRequested);
+            if (isCancelled(cancelRequested)) {
+                return LabelStudioPagedFetchOutcome::Cancelled;
+            }
+            if (requestOk && httpCode >= 200 && httpCode < 300) {
+                error.clear();
+                break;
+            }
+            error = requestOk ? "Label Studio returned HTTP " + std::to_string(httpCode) + ": " + responseBody
+                              : networkError;
+            error += " (page " + std::to_string(page) + ", attempt " + std::to_string(attempt) + ")";
+            if (!isRetryableLabelStudioFailure(!requestOk, httpCode) || attempt == kMaxPageAttempts) {
+                return LabelStudioPagedFetchOutcome::Failed;
+            }
+            if (!sleepUnlessCancelled(attempt, cancelRequested)) {
+                return LabelStudioPagedFetchOutcome::Cancelled;
+            }
         }
 
         nlohmann::json parsed;
         try {
             parsed = nlohmann::json::parse(responseBody);
         } catch (const nlohmann::json::parse_error&) {
-            error = "Failed to parse task list response";
-            return false;
+            error = "Failed to parse task list response (page " + std::to_string(page) + ")";
+            return LabelStudioPagedFetchOutcome::Failed;
         }
+        responseBody.clear();
+        responseBody.shrink_to_fit();
 
-        const nlohmann::json* pageTasks = &parsed;
-        if (parsed.is_object()) {
-            if (parsed.contains("tasks") && parsed["tasks"].is_array()) {
-                pageTasks = &parsed["tasks"];
-            } else if (parsed.contains("results") && parsed["results"].is_array()) {
-                pageTasks = &parsed["results"];
-            }
-        }
-        if (!pageTasks->is_array()) {
+        const LabelStudioTaskPage taskPage = parseLabelStudioTaskPage(parsed);
+        if (taskPage.tasks == nullptr) {
             break;
         }
-
-        for (const auto& task : *pageTasks) {
-            allTasks.push_back(task);
+        if (taskPage.total) {
+            progress.totalTasks = taskPage.total;
         }
-
-        if (!shouldFetchNextLabelStudioPage(parsed, pageTasks->size(), pageSize)) {
+        progress.fetchedTasks += static_cast<int>(taskPage.tasks->size());
+        if (!onPage(*taskPage.tasks, progress)) {
+            return LabelStudioPagedFetchOutcome::Cancelled;
+        }
+        const LabelStudioTaskPageAction action = nextLabelStudioTaskPageAction(
+            parsed, taskPage.tasks->size(), kTaskPageSize, progress, page, kMaxTaskPages);
+        if (action == LabelStudioTaskPageAction::Done) {
             break;
+        }
+        if (action == LabelStudioTaskPageAction::HitPageCap) {
+            error = "Stopped at the " + std::to_string(kMaxTaskPages) + "-page safety cap ("
+                + std::to_string(progress.fetchedTasks) + " tasks fetched); the list would be incomplete";
+            return LabelStudioPagedFetchOutcome::Failed;
         }
     }
+    return LabelStudioPagedFetchOutcome::Completed;
+}
 
-    return true;
+// Accumulates every page from forEachLabelStudioTaskPage into one JSON
+// array -- see the header for why the shared task list no longer uses
+// this.
+bool fetchAllLabelStudioTasksRaw(
+    const std::string& baseUrl, int projectId, const std::string& apiToken, nlohmann::json& allTasks,
+    std::string& error) {
+    allTasks = nlohmann::json::array();
+    const LabelStudioPagedFetchOutcome outcome = forEachLabelStudioTaskPage(
+        baseUrl, projectId, apiToken,
+        [&allTasks](const nlohmann::json& pageTasks, const LabelStudioTaskPageProgress&) {
+            for (const auto& task : pageTasks) {
+                allTasks.push_back(task);
+            }
+            return true;
+        },
+        nullptr, error);
+    return outcome == LabelStudioPagedFetchOutcome::Completed;
 }
 
 LabelStudioTaskListResult fetchLabelStudioTaskSummaries(

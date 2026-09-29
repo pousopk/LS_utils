@@ -1,4 +1,7 @@
 #include "manager/label_studio_client.hpp"
+#include "manager/label_studio_dataset_browser.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -746,6 +749,191 @@ void test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty() {
     CHECK(dedupTimestampMatchCandidates({}).empty());
 }
 
+void test_parseLabelStudioTaskPage_bareArray() {
+    const nlohmann::json page = nlohmann::json::array({{{"id", 1}}, {{"id", 2}}});
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK(parsed.tasks->size() == 2);
+    CHECK(!parsed.total.has_value());
+}
+
+void test_parseLabelStudioTaskPage_tasksKeyWithTotal() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array({{{"id", 1}}})}, {"total", 150000}};
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK(parsed.tasks->size() == 1);
+    CHECK(parsed.total == 150000);
+}
+
+void test_parseLabelStudioTaskPage_resultsKey() {
+    const nlohmann::json page = {{"results", nlohmann::json::array({{{"id", 7}}})}, {"next", nullptr}};
+    const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
+    CHECK(parsed.tasks != nullptr);
+    CHECK((*parsed.tasks)[0]["id"] == 7);
+}
+
+void test_parseLabelStudioTaskPage_objectWithoutArrayHasNoTasks() {
+    const nlohmann::json page = {{"detail", "Not found."}};
+    CHECK(parseLabelStudioTaskPage(page).tasks == nullptr);
+}
+
+void test_isRetryableLabelStudioFailure() {
+    CHECK(isRetryableLabelStudioFailure(true, 0));     // timeout / connection reset
+    CHECK(isRetryableLabelStudioFailure(false, 429));
+    CHECK(isRetryableLabelStudioFailure(false, 502));
+    CHECK(isRetryableLabelStudioFailure(false, 503));
+    CHECK(!isRetryableLabelStudioFailure(false, 401));
+    CHECK(!isRetryableLabelStudioFailure(false, 404));
+    CHECK(!isRetryableLabelStudioFailure(false, 200));
+}
+
+nlohmann::json timestampFixtureTasks() {
+    return nlohmann::json::array({
+        {{"id", 1}, {"data", {{"image", "/1.jpg"}}}, {"created_at", "2026-09-10T10:00:00Z"}},
+        {{"id", 2}, {"data", {{"image", "/2.jpg"}}}, {"created_at", "2026-09-10T10:04:00Z"}},
+        {{"id", 3}, {"data", {{"image", "/3.jpg"}}}, {"created_at", "2026-09-10T11:00:00Z"}},
+        {{"id", 4}, {"data", {{"image", "/4.jpg"}}}},
+        {{"id", 5}, {"data", {{"image", "/5.jpg"}}}, {"created_at", "not a date"}},
+        {{"id", 6}, {"data", {{"other", "/6.jpg"}}}, {"created_at", "2026-09-10T10:01:00Z"}},
+    });
+}
+
+void test_matchSummariesToTimestamps_matchesRawJsonVersion() {
+    const nlohmann::json tasks = timestampFixtureTasks();
+    const std::time_t base = *parseIso8601Utc("2026-09-10T10:01:00Z");
+    const std::vector<TimestampMatchQuery> queries = {{base, 300}, {base + 3540, 60}};
+
+    const auto fromRaw = matchTasksToTimestamps(tasks, "image", queries);
+    const auto fromSummaries = matchSummariesToTimestamps(summarizeDatasetTasks(tasks, "image"), queries);
+
+    CHECK(fromSummaries.size() == fromRaw.size());
+    for (size_t q = 0; q < fromRaw.size() && q < fromSummaries.size(); ++q) {
+        CHECK(fromSummaries[q].size() == fromRaw[q].size());
+        for (size_t i = 0; i < fromRaw[q].size() && i < fromSummaries[q].size(); ++i) {
+            CHECK(fromSummaries[q][i].taskId == fromRaw[q][i].taskId);
+            CHECK(fromSummaries[q][i].imagePath == fromRaw[q][i].imagePath);
+            CHECK(fromSummaries[q][i].deltaSeconds == fromRaw[q][i].deltaSeconds);
+        }
+    }
+    if (fromSummaries.size() == 2) {
+        CHECK(fromSummaries[0].size() == 2);   // tasks 1 (-60s) and 2 (+180s)
+        CHECK(fromSummaries[1].size() == 1);   // task 3
+    }
+}
+
+void test_selectUnlabeledFromSummaries_matchesRawJsonVersion() {
+    const nlohmann::json tasks = nlohmann::json::array({
+        {{"id", 1}, {"data", {{"image", "/1.jpg"}}}, {"total_annotations", 0}, {"total_predictions", 0}},
+        {{"id", 2}, {"data", {{"image", "/2.jpg"}}}, {"total_annotations", 1}, {"total_predictions", 0}},
+        {{"id", 3}, {"data", {{"image", "/3.jpg"}}}, {"annotations", nlohmann::json::array()},
+         {"predictions", nlohmann::json::array({{{"result", nlohmann::json::array()}}})}},
+        {{"id", 4}, {"data", {{"image", "/4.jpg"}}}},
+    });
+    const auto fromRaw = selectUnlabeledTasks(tasks, "image");
+    const auto fromSummaries = selectUnlabeledFromSummaries(summarizeDatasetTasks(tasks, "image"));
+    CHECK(fromSummaries.size() == fromRaw.size());
+    CHECK(fromSummaries.size() == 2);
+    for (size_t i = 0; i < fromRaw.size() && i < fromSummaries.size(); ++i) {
+        CHECK(fromSummaries[i].taskId == fromRaw[i].taskId);
+        CHECK(fromSummaries[i].imagePath == fromRaw[i].imagePath);
+    }
+}
+
+void test_nextLabelStudioTaskPageAction_stopsWhenTotalReachedOnFullPage() {
+    // 150000 tasks = exactly 750 full pages: page 751 must not be requested.
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 150000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 150000;
+    progress.totalTasks = 150000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 750, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_nextLabelStudioTaskPageAction_fullPageBelowTotalFetchesNext() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 150000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 400;
+    progress.totalTasks = 150000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 2, 1000) == LabelStudioTaskPageAction::FetchNext);
+}
+
+void test_nextLabelStudioTaskPageAction_shortPageIsDone() {
+    const nlohmann::json page = nlohmann::json::array();
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 250;
+    CHECK(nextLabelStudioTaskPageAction(page, 50, 200, progress, 2, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_nextLabelStudioTaskPageAction_pageCapWithMoreExpectedIsReported() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 250000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 200000;
+    progress.totalTasks = 250000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 1000, 1000) == LabelStudioTaskPageAction::HitPageCap);
+}
+
+void test_nextLabelStudioTaskPageAction_pageCapOnLastPageIsDone() {
+    const nlohmann::json page = {{"tasks", nlohmann::json::array()}, {"total", 200000}};
+    LabelStudioTaskPageProgress progress;
+    progress.fetchedTasks = 200000;
+    progress.totalTasks = 200000;
+    CHECK(nextLabelStudioTaskPageAction(page, 200, 200, progress, 1000, 1000) == LabelStudioTaskPageAction::Done);
+}
+
+void test_formatIso8601Utc_millisecondZuluFormat() {
+    CHECK(formatIso8601Utc(static_cast<std::time_t>(1788213600)) == "2026-08-31T22:00:00.000Z");
+}
+
+void test_percentEncodeQueryValue_escapesReservedCharacters() {
+    CHECK(percentEncodeQueryValue("abcXYZ019-_.~") == "abcXYZ019-_.~");
+    CHECK(percentEncodeQueryValue("{\"a\":1, \"b\"}") == "%7B%22a%22%3A1%2C%20%22b%22%7D");
+    CHECK(percentEncodeQueryValue("2026-08-31T22:00:00.000Z") == "2026-08-31T22%3A00%3A00.000Z");
+}
+
+void test_buildLabelStudioCreatedAtQuery_emptyWhenUnbounded() {
+    CHECK(buildLabelStudioCreatedAtQuery(TaskCreatedAtBounds{}).empty());
+}
+
+void test_buildLabelStudioCreatedAtQuery_bothBounds() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = static_cast<std::time_t>(1788213600);
+    bounds.toExclusive = static_cast<std::time_t>(1788213600 + 86400);
+    const nlohmann::json query = nlohmann::json::parse(buildLabelStudioCreatedAtQuery(bounds));
+    const nlohmann::json expected = {
+        {"filters",
+         {{"conjunction", "and"},
+          {"items",
+           {{{"filter", "filter:tasks:created_at"}, {"operator", "greater_or_equal"}, {"type", "Datetime"},
+             {"value", "2026-08-31T22:00:00.000Z"}},
+            {{"filter", "filter:tasks:created_at"}, {"operator", "less"}, {"type", "Datetime"},
+             {"value", "2026-09-01T22:00:00.000Z"}}}}}},
+    };
+    CHECK(query == expected);
+}
+
+void test_buildLabelStudioCreatedAtQuery_fromOnly() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = static_cast<std::time_t>(1788213600);
+    const nlohmann::json query = nlohmann::json::parse(buildLabelStudioCreatedAtQuery(bounds));
+    CHECK(query["filters"]["items"].size() == 1);
+    CHECK(query["filters"]["items"][0]["operator"] == "greater_or_equal");
+}
+
+void test_isTaskCreatedWithin_inclusiveFromExclusiveTo() {
+    TaskCreatedAtBounds bounds;
+    bounds.fromInclusive = *parseIso8601Utc("2026-09-01T00:00:00Z");
+    bounds.toExclusive = *parseIso8601Utc("2026-09-02T00:00:00Z");
+    CHECK(isTaskCreatedWithin("2026-09-01T00:00:00Z", bounds));
+    CHECK(isTaskCreatedWithin("2026-09-01T23:59:59.999Z", bounds));
+    CHECK(!isTaskCreatedWithin("2026-09-02T00:00:00Z", bounds));
+    CHECK(!isTaskCreatedWithin("2026-08-31T23:59:59Z", bounds));
+    CHECK(!isTaskCreatedWithin("", bounds));   // unknown date can't be shown to be in range
+}
+
+void test_isTaskCreatedWithin_unboundedAcceptsEverything() {
+    CHECK(isTaskCreatedWithin("", TaskCreatedAtBounds{}));
+    CHECK(isTaskCreatedWithin("garbage", TaskCreatedAtBounds{}));
+}
+
 } // namespace
 
 int main() {
@@ -812,7 +1000,26 @@ int main() {
     test_parseBrushResultRegions_filtersByFromNameAndType();
     test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId();
     test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty();
+    test_parseLabelStudioTaskPage_bareArray();
+    test_parseLabelStudioTaskPage_tasksKeyWithTotal();
+    test_parseLabelStudioTaskPage_resultsKey();
+    test_parseLabelStudioTaskPage_objectWithoutArrayHasNoTasks();
+    test_isRetryableLabelStudioFailure();
 
+    test_matchSummariesToTimestamps_matchesRawJsonVersion();
+    test_selectUnlabeledFromSummaries_matchesRawJsonVersion();
+    test_nextLabelStudioTaskPageAction_stopsWhenTotalReachedOnFullPage();
+    test_nextLabelStudioTaskPageAction_fullPageBelowTotalFetchesNext();
+    test_nextLabelStudioTaskPageAction_shortPageIsDone();
+    test_nextLabelStudioTaskPageAction_pageCapWithMoreExpectedIsReported();
+    test_nextLabelStudioTaskPageAction_pageCapOnLastPageIsDone();
+    test_formatIso8601Utc_millisecondZuluFormat();
+    test_percentEncodeQueryValue_escapesReservedCharacters();
+    test_buildLabelStudioCreatedAtQuery_emptyWhenUnbounded();
+    test_buildLabelStudioCreatedAtQuery_bothBounds();
+    test_buildLabelStudioCreatedAtQuery_fromOnly();
+    test_isTaskCreatedWithin_inclusiveFromExclusiveTo();
+    test_isTaskCreatedWithin_unboundedAcceptsEverything();
     if (g_failures == 0) {
         std::printf("All tests passed.\n");
         return 0;
