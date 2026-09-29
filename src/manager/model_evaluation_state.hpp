@@ -1,21 +1,17 @@
 #pragma once
 
 #include "manager/anomaly_inference.hpp"
-#include "manager/anomaly_worker.hpp"
 #include "manager/app_runtime.hpp"
 #include "manager/batch_eval_filters.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
 #include "manager/classification_metrics.hpp"
-#include "manager/classification_worker.hpp"
 #include "manager/comparison_task_mode.hpp"
 #include "manager/detection_metrics.hpp"
-#include "manager/inference_worker.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/model_metadata_detection.hpp"
 #include "manager/yolo_inference.hpp"
-#include "objects/frame_source.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -27,9 +23,7 @@
 
 struct ModelEvaluationState;
 
-// Shared model configuration for one "slot" (Model A or Model B), used
-// regardless of whether the evaluation source is Live or Batch. Loading a
-// model here makes it available to both sources without reloading.
+// Shared model configuration for one "slot" (Model A or Model B).
 struct ModelSlotConfig {
     std::string onnxPath;
     std::string classNamesPath;
@@ -74,67 +68,6 @@ void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ComparisonTaskMode& taskM
 // baseline (never down), and every label is drawn on a solid background so
 // it stays readable regardless of the photo's own colors.
 cv::Mat annotateDetections(const cv::Mat& frame, const std::vector<Detection>& detections);
-
-enum class EvaluationSourceMode {
-    Live,
-    Batch,
-};
-
-enum class LiveSourceMode {
-    None,
-    ExistingSession,
-    LoadedFile,
-};
-
-// Per-slot live-streaming runtime: the continuously-running inference
-// worker, its output texture, and its latest results. Kept separate from
-// ModelSlotConfig because it is Live-source-specific runtime state, not
-// model configuration. workerModel/workerClassificationModel track which
-// model the current worker was built from, so updateLiveRuntime can detect
-// a (re)load -- including one that happened while Batch was the active
-// source -- and rebuild the worker lazily.
-struct LiveRuntimeSlot {
-    GLuint texture = 0;
-    int textureWidth = 0;
-    int textureHeight = 0;
-
-    std::unique_ptr<InferenceWorker> worker;
-    std::shared_ptr<YoloModel> workerModel;
-    std::vector<Detection> latestDetections;
-    double latestInferenceMs = 0.0;
-
-    std::unique_ptr<ClassificationInferenceWorker> classificationWorker;
-    std::shared_ptr<ClassificationModel> workerClassificationModel;
-    std::vector<ClassPrediction> latestPredictions;
-
-    std::unique_ptr<AnomalyInferenceWorker> anomalyWorker;
-    std::shared_ptr<AnomalyModel> workerAnomalyModel;
-    AnomalyResult latestAnomalyResult;
-
-    std::string runtimeError;
-};
-
-struct LiveRuntime {
-    LiveSourceMode sourceMode = LiveSourceMode::None;
-    std::string sessionId;
-    std::unique_ptr<FrameSource> loadedSource;
-    std::string loadedSourcePath;
-
-    std::array<LiveRuntimeSlot, 2> liveSlots;
-
-    float agreementIoUThreshold = 0.5f;
-    BoxAgreement latestAgreement;
-};
-
-// Pulls the current frame from whichever live source is selected, submits
-// it to each active (0, or 0 and 1 if compareTwoModels) slot's idle
-// worker -- rebuilding that slot's worker first if its model was
-// (re)loaded since the last call -- drains finished results into that
-// slot's texture/stats, and recomputes the agreement stat (Detection mode,
-// compareTwoModels only).
-void updateLiveRuntime(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, LiveRuntime& live,
-    std::vector<CameraSession>& sessions);
 
 enum class BatchEvalRunState {
     NotStarted,
@@ -194,9 +127,8 @@ struct BatchRuntime {
     bool sampleEnabled = false;
     int sampleSize = 100;
 
-    // Per-slot preview texture for the currently selected image (Batch's
-    // per-image detail pane); Live's per-slot streaming texture lives on
-    // LiveRuntimeSlot instead.
+    // Per-slot preview texture for the currently selected image (the
+    // per-image detail pane).
     std::array<BatchPreviewTexture, 2> previewTextures;
 
     bool folderPickerOpen = false;
@@ -248,21 +180,17 @@ enum class FilePickerTarget {
     SlotBModel,
     SlotBClassNames,
     GroundTruthJson,
-    LiveSourceFile,
 };
 
 struct ModelEvaluationState {
     ComparisonTaskMode taskMode = ComparisonTaskMode::Detection;
     bool compareTwoModels = false;  // default: single model
-    EvaluationSourceMode source = EvaluationSourceMode::Live;
 
     std::array<ModelSlotConfig, 2> slots;
 
-    LiveRuntime live;
     BatchRuntime batch;
 
-    // Shared file-picker popup state, reused for onnx/class-names/ground-
-    // truth/live-source-file selection across both slots and both sources.
+    // Shared file-picker popup state, reused for onnx/class-names/ground-truth selection across both slots.
     bool filePickerOpen = false;
     FilePickerTarget filePickerTarget = FilePickerTarget::SlotAModel;
     std::string filePickerDir;
@@ -270,11 +198,8 @@ struct ModelEvaluationState {
     std::string filePickerFilter;
 };
 
-// Resets both runtimes' results (live workers/textures/detections/
-// predictions, batch resultA/B/metrics/run state) without touching slot
-// config. Called on taskMode/compareTwoModels changes so neither source
-// ever shows stale content for a mode/count that no longer matches. Live
-// workers are torn down here but rebuild automatically on the next
-// updateLiveRuntime call (workerModel becomes null, which no longer
-// matches the still-loaded ModelSlotConfig, triggering a rebuild).
+// Resets batch results (resultA/B, metrics, run state, selection) and
+// drops filter values that no longer apply, without touching slot
+// config. Called on taskMode/compareTwoModels changes so the window
+// never shows results for a mode/count that no longer matches.
 void resetModelEvaluationResults(ModelEvaluationState& state);

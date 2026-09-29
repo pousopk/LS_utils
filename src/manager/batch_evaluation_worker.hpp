@@ -103,7 +103,7 @@ public:
     // Lock-free snapshot of current progress -- safe to call every frame.
     BatchEvalProgress progress() const;
 
-    // Non-blocking poll, same pattern as InferenceWorker::tryTakeResult:
+    // Non-blocking poll:
     // returns true and moves the result out exactly once, on the frame
     // after the run finishes (normally or via cancel).
     bool tryTakeResult(BatchEvalRunResult& out);

@@ -206,17 +206,6 @@ void applyAutoDetectToModelSlot(ModelSlotConfig& slot, ComparisonTaskMode& taskM
 
 namespace {
 
-cv::Mat currentLiveFrame(const LiveRuntime& live, std::vector<CameraSession>& sessions) {
-    if (live.sourceMode == LiveSourceMode::ExistingSession) {
-        CameraSession* session = findSession(sessions, live.sessionId);
-        return session != nullptr ? session->latestRawFrame : cv::Mat();
-    }
-    if (live.sourceMode == LiveSourceMode::LoadedFile && live.loadedSource && live.loadedSource->isValid()) {
-        return live.loadedSource->grabFrame();
-    }
-    return cv::Mat();
-}
-
 cv::Mat annotateAnomalyHeatmap(const cv::Mat& frame, const AnomalyResult& result) {
     cv::Mat annotated = frame.clone();
     if (!result.heatmap.empty()) {
@@ -246,128 +235,6 @@ cv::Mat annotateAnomalyHeatmap(const cv::Mat& frame, const AnomalyResult& result
         textThickness, cv::LINE_AA);
     return annotated;
 }
-
-void updateLiveSlot(
-    ComparisonTaskMode mode, const ModelSlotConfig& slot, LiveRuntimeSlot& liveSlot, const cv::Mat& frame) {
-    if (liveSlot.texture == 0) {
-        glGenTextures(1, &liveSlot.texture);
-    }
-
-    if (mode == ComparisonTaskMode::Detection) {
-        if (liveSlot.workerModel != slot.detectionModel) {
-            liveSlot.worker.reset();
-            liveSlot.workerModel = slot.detectionModel;
-            liveSlot.latestDetections.clear();
-            liveSlot.runtimeError.clear();
-            if (slot.detectionModel) {
-                liveSlot.worker = std::make_unique<InferenceWorker>(slot.detectionModel);
-            }
-        }
-        liveSlot.classificationWorker.reset();
-        liveSlot.workerClassificationModel.reset();
-        liveSlot.anomalyWorker.reset();
-        liveSlot.workerAnomalyModel.reset();
-
-        if (!liveSlot.worker) {
-            return;
-        }
-        if (!frame.empty() && liveSlot.worker->isIdle()) {
-            liveSlot.worker->submit(frame.clone(), slot.confThreshold, slot.nmsThreshold);
-        }
-        InferenceWorker::Result result;
-        if (liveSlot.worker->tryTakeResult(result)) {
-            liveSlot.runtimeError = result.error;
-            liveSlot.latestDetections = std::move(result.detections);
-            liveSlot.latestInferenceMs = result.inferenceMs;
-            if (!frame.empty()) {
-                const cv::Mat annotated = annotateDetections(frame, liveSlot.latestDetections);
-                uploadFrameToTexture(liveSlot.texture, annotated, liveSlot.textureWidth, liveSlot.textureHeight);
-            }
-        }
-    } else if (mode == ComparisonTaskMode::Classification) {
-        if (liveSlot.workerClassificationModel != slot.classificationModel) {
-            liveSlot.classificationWorker.reset();
-            liveSlot.workerClassificationModel = slot.classificationModel;
-            liveSlot.latestPredictions.clear();
-            liveSlot.runtimeError.clear();
-            if (slot.classificationModel) {
-                liveSlot.classificationWorker =
-                    std::make_unique<ClassificationInferenceWorker>(slot.classificationModel);
-            }
-        }
-        liveSlot.worker.reset();
-        liveSlot.workerModel.reset();
-        liveSlot.anomalyWorker.reset();
-        liveSlot.workerAnomalyModel.reset();
-
-        if (!liveSlot.classificationWorker) {
-            return;
-        }
-        if (!frame.empty() && liveSlot.classificationWorker->isIdle()) {
-            liveSlot.classificationWorker->submit(frame.clone());
-        }
-        ClassificationInferenceWorker::Result result;
-        if (liveSlot.classificationWorker->tryTakeResult(result)) {
-            liveSlot.runtimeError = result.error;
-            liveSlot.latestPredictions = std::move(result.predictions);
-            liveSlot.latestInferenceMs = result.inferenceMs;
-            if (!frame.empty()) {
-                uploadFrameToTexture(liveSlot.texture, frame, liveSlot.textureWidth, liveSlot.textureHeight);
-            }
-        }
-    } else {
-        if (liveSlot.workerAnomalyModel != slot.anomalyModel) {
-            liveSlot.anomalyWorker.reset();
-            liveSlot.workerAnomalyModel = slot.anomalyModel;
-            liveSlot.latestAnomalyResult = AnomalyResult{};
-            liveSlot.runtimeError.clear();
-            if (slot.anomalyModel) {
-                liveSlot.anomalyWorker = std::make_unique<AnomalyInferenceWorker>(slot.anomalyModel);
-            }
-        }
-        liveSlot.worker.reset();
-        liveSlot.workerModel.reset();
-        liveSlot.classificationWorker.reset();
-        liveSlot.workerClassificationModel.reset();
-
-        if (!liveSlot.anomalyWorker) {
-            return;
-        }
-        if (!frame.empty() && liveSlot.anomalyWorker->isIdle()) {
-            liveSlot.anomalyWorker->submit(frame.clone(), slot.anomalyThreshold);
-        }
-        AnomalyInferenceWorker::Result result;
-        if (liveSlot.anomalyWorker->tryTakeResult(result)) {
-            liveSlot.runtimeError = result.error;
-            liveSlot.latestAnomalyResult = result.anomaly;
-            liveSlot.latestInferenceMs = result.inferenceMs;
-            if (!frame.empty()) {
-                const cv::Mat annotated = annotateAnomalyHeatmap(frame, liveSlot.latestAnomalyResult);
-                uploadFrameToTexture(liveSlot.texture, annotated, liveSlot.textureWidth, liveSlot.textureHeight);
-            }
-        }
-    }
-}
-
-} // namespace
-
-void updateLiveRuntime(
-    ComparisonTaskMode mode, bool compareTwoModels, const std::array<ModelSlotConfig, 2>& slots, LiveRuntime& live,
-    std::vector<CameraSession>& sessions) {
-    const cv::Mat frame = currentLiveFrame(live, sessions);
-
-    const int slotCount = compareTwoModels ? 2 : 1;
-    for (int i = 0; i < slotCount; ++i) {
-        updateLiveSlot(mode, slots[static_cast<size_t>(i)], live.liveSlots[static_cast<size_t>(i)], frame);
-    }
-
-    if (mode == ComparisonTaskMode::Detection && compareTwoModels) {
-        live.latestAgreement = computeBoxAgreement(
-            live.liveSlots[0].latestDetections, live.liveSlots[1].latestDetections, live.agreementIoUThreshold);
-    }
-}
-
-namespace {
 
 void syncBatchEvalSelectedPreview(
     ComparisonTaskMode mode, const std::array<ModelSlotConfig, 2>& slots, const std::string& imageFolderPath,
@@ -570,20 +437,6 @@ void updateBatchRuntime(
 }
 
 void resetModelEvaluationResults(ModelEvaluationState& state) {
-    for (auto& liveSlot : state.live.liveSlots) {
-        liveSlot.worker.reset();
-        liveSlot.workerModel.reset();
-        liveSlot.classificationWorker.reset();
-        liveSlot.workerClassificationModel.reset();
-        liveSlot.anomalyWorker.reset();
-        liveSlot.workerAnomalyModel.reset();
-        liveSlot.latestDetections.clear();
-        liveSlot.latestPredictions.clear();
-        liveSlot.latestAnomalyResult = AnomalyResult{};
-        liveSlot.runtimeError.clear();
-    }
-    state.live.latestAgreement = BoxAgreement{};
-
     state.batch.runState = BatchEvalRunState::NotStarted;
     state.batch.resultA = BatchEvaluationResult{};
     state.batch.resultB = BatchEvaluationResult{};
