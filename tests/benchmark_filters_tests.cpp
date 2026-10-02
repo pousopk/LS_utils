@@ -1,4 +1,4 @@
-#include "manager/batch_eval_filters.hpp"
+#include "manager/benchmark_filters.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -31,8 +31,8 @@ GroundTruthBox gt(const char* className, cv::Rect box, float rotationDegrees = 0
     return GroundTruthBox{box, className, rotationDegrees};
 }
 
-BatchImageResult detImage(std::vector<Detection> detections, std::vector<GroundTruthBox> truth = {}, bool hasGroundTruth = true) {
-    BatchImageResult image;
+BenchmarkImageResult detImage(std::vector<Detection> detections, std::vector<GroundTruthBox> truth = {}, bool hasGroundTruth = true) {
+    BenchmarkImageResult image;
     image.detections = std::move(detections);
     image.groundTruthBoxes = std::move(truth);
     image.hasGroundTruth = hasGroundTruth;
@@ -41,8 +41,8 @@ BatchImageResult detImage(std::vector<Detection> detections, std::vector<GroundT
 
 // truth == nullptr -> no ground truth for this image.
 // predicted == nullptr -> no prediction.
-BatchImageResult clsImage(const char* predicted, const char* truth, float probability = 0.9f) {
-    BatchImageResult image;
+BenchmarkImageResult clsImage(const char* predicted, const char* truth, float probability = 0.9f) {
+    BenchmarkImageResult image;
     if (predicted != nullptr) {
         image.predictions.push_back(ClassPrediction{0, predicted, probability});
     }
@@ -107,138 +107,138 @@ void test_matchDetections_emptyInputs() {
 }
 
 void test_confidence_detectionBasis() {
-    const BatchImageResult image = detImage({det("a", kBoxA, 0.2f), det("b", kBoxA, 0.6f), det("c", kBoxA, 1.0f)});
-    const auto mode = ComparisonTaskMode::Detection;
-    CHECK(approxEqual(*batchEvalImageConfidence(mode, &image, BatchEvalConfidenceBasis::Mean), 0.6f));
-    CHECK(approxEqual(*batchEvalImageConfidence(mode, &image, BatchEvalConfidenceBasis::Lowest), 0.2f));
-    CHECK(approxEqual(*batchEvalImageConfidence(mode, &image, BatchEvalConfidenceBasis::Highest), 1.0f));
+    const BenchmarkImageResult image = detImage({det("a", kBoxA, 0.2f), det("b", kBoxA, 0.6f), det("c", kBoxA, 1.0f)});
+    const auto mode = ModelTask::Detection;
+    CHECK(approxEqual(*benchmarkImageConfidence(mode, &image, BenchmarkConfidenceBasis::Mean), 0.6f));
+    CHECK(approxEqual(*benchmarkImageConfidence(mode, &image, BenchmarkConfidenceBasis::Lowest), 0.2f));
+    CHECK(approxEqual(*benchmarkImageConfidence(mode, &image, BenchmarkConfidenceBasis::Highest), 1.0f));
 }
 
 void test_confidence_noBoxesOrNullIsNullopt() {
-    const BatchImageResult empty = detImage({});
-    CHECK(!batchEvalImageConfidence(ComparisonTaskMode::Detection, &empty, BatchEvalConfidenceBasis::Mean));
-    CHECK(!batchEvalImageConfidence(ComparisonTaskMode::Detection, nullptr, BatchEvalConfidenceBasis::Mean));
+    const BenchmarkImageResult empty = detImage({});
+    CHECK(!benchmarkImageConfidence(ModelTask::Detection, &empty, BenchmarkConfidenceBasis::Mean));
+    CHECK(!benchmarkImageConfidence(ModelTask::Detection, nullptr, BenchmarkConfidenceBasis::Mean));
 }
 
 void test_confidence_classificationIgnoresBasis() {
-    const BatchImageResult image = clsImage("cat", nullptr, 0.7f);
-    CHECK(approxEqual(*batchEvalImageConfidence(ComparisonTaskMode::Classification, &image, BatchEvalConfidenceBasis::Lowest), 0.7f));
-    CHECK(approxEqual(*batchEvalImageConfidence(ComparisonTaskMode::Classification, &image, BatchEvalConfidenceBasis::Highest), 0.7f));
+    const BenchmarkImageResult image = clsImage("cat", nullptr, 0.7f);
+    CHECK(approxEqual(*benchmarkImageConfidence(ModelTask::Classification, &image, BenchmarkConfidenceBasis::Lowest), 0.7f));
+    CHECK(approxEqual(*benchmarkImageConfidence(ModelTask::Classification, &image, BenchmarkConfidenceBasis::Highest), 0.7f));
 }
 
 void test_confidence_anomalyScore() {
-    BatchImageResult image;
-    image.anomalyResult = BatchAnomalyResult{3.0f, 0.4f, false};
-    CHECK(approxEqual(*batchEvalImageConfidence(ComparisonTaskMode::Anomaly, &image, BatchEvalConfidenceBasis::Mean), 0.4f));
+    BenchmarkImageResult image;
+    image.anomalyResult = BenchmarkAnomalyResult{3.0f, 0.4f, false};
+    CHECK(approxEqual(*benchmarkImageConfidence(ModelTask::Anomaly, &image, BenchmarkConfidenceBasis::Mean), 0.4f));
 }
 
 void test_sortConfidence_twoSlotRule() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const auto basis = BatchEvalConfidenceBasis::Mean;
-    const BatchImageResult low = detImage({det("a", kBoxA, 0.3f)});
-    const BatchImageResult high = detImage({det("a", kBoxA, 0.8f)});
-    const BatchImageResult empty = detImage({});
-    CHECK(approxEqual(batchEvalImageSortConfidence(mode, &low, &high, basis), 0.3f));
-    CHECK(approxEqual(batchEvalImageSortConfidence(mode, &high, &low, basis), 0.3f));
-    CHECK(approxEqual(batchEvalImageSortConfidence(mode, &high, nullptr, basis), 0.8f));
-    CHECK(approxEqual(batchEvalImageSortConfidence(mode, &empty, &high, basis), 0.8f));
-    CHECK(approxEqual(batchEvalImageSortConfidence(mode, &empty, nullptr, basis), 0.0f));
+    const auto mode = ModelTask::Detection;
+    const auto basis = BenchmarkConfidenceBasis::Mean;
+    const BenchmarkImageResult low = detImage({det("a", kBoxA, 0.3f)});
+    const BenchmarkImageResult high = detImage({det("a", kBoxA, 0.8f)});
+    const BenchmarkImageResult empty = detImage({});
+    CHECK(approxEqual(benchmarkImageSortConfidence(mode, &low, &high, basis), 0.3f));
+    CHECK(approxEqual(benchmarkImageSortConfidence(mode, &high, &low, basis), 0.3f));
+    CHECK(approxEqual(benchmarkImageSortConfidence(mode, &high, nullptr, basis), 0.8f));
+    CHECK(approxEqual(benchmarkImageSortConfidence(mode, &empty, &high, basis), 0.8f));
+    CHECK(approxEqual(benchmarkImageSortConfidence(mode, &empty, nullptr, basis), 0.0f));
 }
 
-bool passes(ComparisonTaskMode mode, const BatchImageResult* a, const BatchImageResult* b, const BatchEvalImageFilters& f, bool hasGroundTruth = true) {
-    return batchEvalImagePassesFilters(mode, hasGroundTruth, a, b, f);
+bool passes(ModelTask mode, const BenchmarkImageResult* a, const BenchmarkImageResult* b, const BenchmarkImageFilters& f, bool hasGroundTruth = true) {
+    return benchmarkImagePassesFilters(mode, hasGroundTruth, a, b, f);
 }
 
 void test_filters_defaultsPassEverything() {
-    const BatchEvalImageFilters f;
-    const BatchImageResult emptyDet = detImage({}, {}, false);
-    const BatchImageResult wrongDet = detImage({det("dog", kBoxA)}, {gt("cat", kBoxA)});
-    const BatchImageResult wrongCls = clsImage("dog", "cat");
-    BatchImageResult anomaly;
-    anomaly.anomalyResult = BatchAnomalyResult{1.0f, 0.9f, true};
-    CHECK(passes(ComparisonTaskMode::Detection, &emptyDet, nullptr, f));
-    CHECK(passes(ComparisonTaskMode::Detection, &wrongDet, &emptyDet, f));
-    CHECK(passes(ComparisonTaskMode::Classification, &wrongCls, nullptr, f));
-    CHECK(passes(ComparisonTaskMode::Anomaly, &anomaly, nullptr, f));
+    const BenchmarkImageFilters f;
+    const BenchmarkImageResult emptyDet = detImage({}, {}, false);
+    const BenchmarkImageResult wrongDet = detImage({det("dog", kBoxA)}, {gt("cat", kBoxA)});
+    const BenchmarkImageResult wrongCls = clsImage("dog", "cat");
+    BenchmarkImageResult anomaly;
+    anomaly.anomalyResult = BenchmarkAnomalyResult{1.0f, 0.9f, true};
+    CHECK(passes(ModelTask::Detection, &emptyDet, nullptr, f));
+    CHECK(passes(ModelTask::Detection, &wrongDet, &emptyDet, f));
+    CHECK(passes(ModelTask::Classification, &wrongCls, nullptr, f));
+    CHECK(passes(ModelTask::Anomaly, &anomaly, nullptr, f));
 }
 
 void test_filters_detectionErrorTypes() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult correct = detImage({det("cat", kBoxA)}, {gt("cat", kBoxA)});
-    const BatchImageResult fpOnly = detImage({det("cat", kBoxA), det("cat", kBoxFar)}, {gt("cat", kBoxA)});
-    const BatchImageResult missedOnly = detImage({}, {gt("cat", kBoxA)});
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult correct = detImage({det("cat", kBoxA)}, {gt("cat", kBoxA)});
+    const BenchmarkImageResult fpOnly = detImage({det("cat", kBoxA), det("cat", kBoxFar)}, {gt("cat", kBoxA)});
+    const BenchmarkImageResult missedOnly = detImage({}, {gt("cat", kBoxA)});
 
-    BatchEvalImageFilters f;
-    f.errorFilter = BatchEvalErrorFilter::AnyError;
+    BenchmarkImageFilters f;
+    f.errorFilter = BenchmarkErrorFilter::AnyError;
     CHECK(!passes(mode, &correct, nullptr, f));
     CHECK(passes(mode, &fpOnly, nullptr, f));
     CHECK(passes(mode, &missedOnly, nullptr, f));
 
-    f.errorFilter = BatchEvalErrorFilter::FalsePositives;
+    f.errorFilter = BenchmarkErrorFilter::FalsePositives;
     CHECK(passes(mode, &fpOnly, nullptr, f));
     CHECK(!passes(mode, &missedOnly, nullptr, f));
 
-    f.errorFilter = BatchEvalErrorFilter::Missed;
+    f.errorFilter = BenchmarkErrorFilter::Missed;
     CHECK(!passes(mode, &fpOnly, nullptr, f));
     CHECK(passes(mode, &missedOnly, nullptr, f));
 }
 
 void test_filters_errorEitherSlotAndNoGroundTruth() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult correct = detImage({det("cat", kBoxA)}, {gt("cat", kBoxA)});
-    const BatchImageResult missed = detImage({}, {gt("cat", kBoxA)});
-    const BatchImageResult noGt = detImage({det("cat", kBoxA)}, {}, false);
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult correct = detImage({det("cat", kBoxA)}, {gt("cat", kBoxA)});
+    const BenchmarkImageResult missed = detImage({}, {gt("cat", kBoxA)});
+    const BenchmarkImageResult noGt = detImage({det("cat", kBoxA)}, {}, false);
 
-    BatchEvalImageFilters f;
-    f.errorFilter = BatchEvalErrorFilter::AnyError;
+    BenchmarkImageFilters f;
+    f.errorFilter = BenchmarkErrorFilter::AnyError;
     CHECK(passes(mode, &correct, &missed, f));   // B has the error
     CHECK(!passes(mode, &noGt, nullptr, f));     // a slot without GT never has an "error"
     CHECK(passes(mode, &noGt, nullptr, f, false));  // run without GT: filter ignored
 }
 
 void test_filters_classificationMisclassified() {
-    const auto mode = ComparisonTaskMode::Classification;
-    const BatchImageResult right = clsImage("cat", "cat");
-    const BatchImageResult wrong = clsImage("dog", "cat");
-    const BatchImageResult noPrediction = clsImage(nullptr, "cat");
+    const auto mode = ModelTask::Classification;
+    const BenchmarkImageResult right = clsImage("cat", "cat");
+    const BenchmarkImageResult wrong = clsImage("dog", "cat");
+    const BenchmarkImageResult noPrediction = clsImage(nullptr, "cat");
 
-    BatchEvalImageFilters f;
-    f.errorFilter = BatchEvalErrorFilter::AnyError;
+    BenchmarkImageFilters f;
+    f.errorFilter = BenchmarkErrorFilter::AnyError;
     CHECK(!passes(mode, &right, nullptr, f));
     CHECK(passes(mode, &wrong, nullptr, f));
     CHECK(!passes(mode, &noPrediction, nullptr, f));
 
-    f.errorFilter = BatchEvalErrorFilter::Missed;  // treated as AnyError in classification
+    f.errorFilter = BenchmarkErrorFilter::Missed;  // treated as AnyError in classification
     CHECK(passes(mode, &wrong, nullptr, f));
 }
 
 void test_filters_confidenceFilterUsesBasis() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult image = detImage({det("a", kBoxA, 0.2f), det("b", kBoxA, 0.9f)});  // mean 0.55
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult image = detImage({det("a", kBoxA, 0.2f), det("b", kBoxA, 0.9f)});  // mean 0.55
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.confidence.mode = ThresholdMode::LessThan;
     f.confidence.threshold = 0.5f;
     CHECK(!passes(mode, &image, nullptr, f));  // mean 0.55 is not < 0.5
-    f.confidenceBasis = BatchEvalConfidenceBasis::Lowest;
+    f.confidenceBasis = BenchmarkConfidenceBasis::Lowest;
     CHECK(passes(mode, &image, nullptr, f));   // lowest 0.2 < 0.5
 
     f.confidence.mode = ThresholdMode::GreaterThan;
     f.confidence.threshold = 0.8f;
     CHECK(!passes(mode, &image, nullptr, f));  // lowest 0.2
-    f.confidenceBasis = BatchEvalConfidenceBasis::Highest;
+    f.confidenceBasis = BenchmarkConfidenceBasis::Highest;
     CHECK(passes(mode, &image, nullptr, f));   // highest 0.9
 
-    const BatchImageResult empty = detImage({});
+    const BenchmarkImageResult empty = detImage({});
     CHECK(!passes(mode, &empty, nullptr, f));  // no value never passes a confidence filter
 }
 
 void test_filters_detectionPresence() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult some = detImage({det("a", kBoxA)});
-    const BatchImageResult none = detImage({});
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult some = detImage({det("a", kBoxA)});
+    const BenchmarkImageResult none = detImage({});
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.detections.presence = Presence::Lacks;
     CHECK(passes(mode, &none, nullptr, f));
     CHECK(!passes(mode, &some, nullptr, f));  // null slot B must not count as "no detections"
@@ -248,58 +248,58 @@ void test_filters_detectionPresence() {
     CHECK(passes(mode, &some, nullptr, f));
     CHECK(!passes(mode, &none, nullptr, f));
 
-    const BatchImageResult cls = clsImage("cat", nullptr);
-    CHECK(passes(ComparisonTaskMode::Classification, &cls, nullptr, f));  // ignored outside detection
+    const BenchmarkImageResult cls = clsImage("cat", nullptr);
+    CHECK(passes(ModelTask::Classification, &cls, nullptr, f));  // ignored outside detection
 }
 
 void test_classFilter_aloneMatchesGroundTruthOrPrediction() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult gtOnly = detImage({}, {gt("scratch", kBoxA)});
-    const BatchImageResult predOnly = detImage({det("scratch", kBoxA)}, {}, false);
-    const BatchImageResult other = detImage({det("dent", kBoxA)}, {gt("dent", kBoxA)});
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult gtOnly = detImage({}, {gt("scratch", kBoxA)});
+    const BenchmarkImageResult predOnly = detImage({det("scratch", kBoxA)}, {}, false);
+    const BenchmarkImageResult other = detImage({det("dent", kBoxA)}, {gt("dent", kBoxA)});
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.cls.className = "scratch";
     CHECK(passes(mode, &gtOnly, nullptr, f));
     CHECK(passes(mode, &predOnly, nullptr, f));
     CHECK(!passes(mode, &other, nullptr, f));
     CHECK(passes(mode, &other, &predOnly, f));  // either slot
 
-    const BatchImageResult clsGt = clsImage("dog", "cat");
+    const BenchmarkImageResult clsGt = clsImage("dog", "cat");
     f.cls.className = "cat";
-    CHECK(passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
+    CHECK(passes(ModelTask::Classification, &clsGt, nullptr, f));
     f.cls.className = "dog";
-    CHECK(passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
+    CHECK(passes(ModelTask::Classification, &clsGt, nullptr, f));
     f.cls.className = "bird";
-    CHECK(!passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
+    CHECK(!passes(ModelTask::Classification, &clsGt, nullptr, f));
 }
 
 void test_classFilter_scopesDetectionErrors() {
-    const auto mode = ComparisonTaskMode::Detection;
+    const auto mode = ModelTask::Detection;
     // scratch correctly found, dent missed, one false-positive "dent" far away.
-    const BatchImageResult image = detImage(
+    const BenchmarkImageResult image = detImage(
         {det("scratch", kBoxA), det("dent", kBoxFar)},
         {gt("scratch", kBoxA), gt("dent", cv::Rect(50, 50, 10, 10))});
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.cls.className = "scratch";
-    f.errorFilter = BatchEvalErrorFilter::AnyError;
+    f.errorFilter = BenchmarkErrorFilter::AnyError;
     CHECK(!passes(mode, &image, nullptr, f));  // no scratch errors
     f.cls.className = "dent";
     CHECK(passes(mode, &image, nullptr, f));
-    f.errorFilter = BatchEvalErrorFilter::Missed;
+    f.errorFilter = BenchmarkErrorFilter::Missed;
     CHECK(passes(mode, &image, nullptr, f));
-    f.errorFilter = BatchEvalErrorFilter::FalsePositives;
+    f.errorFilter = BenchmarkErrorFilter::FalsePositives;
     CHECK(passes(mode, &image, nullptr, f));
     f.cls.className = "scratch";
     CHECK(!passes(mode, &image, nullptr, f));
 }
 
 void test_classFilter_scopesMisclassificationEitherDirection() {
-    const auto mode = ComparisonTaskMode::Classification;
-    const BatchImageResult catAsDog = clsImage("dog", "cat");
-    BatchEvalImageFilters f;
-    f.errorFilter = BatchEvalErrorFilter::AnyError;
+    const auto mode = ModelTask::Classification;
+    const BenchmarkImageResult catAsDog = clsImage("dog", "cat");
+    BenchmarkImageFilters f;
+    f.errorFilter = BenchmarkErrorFilter::AnyError;
     f.cls.className = "cat";
     CHECK(passes(mode, &catAsDog, nullptr, f));   // true label
     f.cls.className = "dog";
@@ -309,31 +309,31 @@ void test_classFilter_scopesMisclassificationEitherDirection() {
 }
 
 void test_collectClassNames() {
-    BatchEvaluationResult a;
+    BenchmarkResult a;
     a.images.push_back(detImage({det("dent", kBoxA)}, {gt("scratch", kBoxA)}));
-    BatchEvaluationResult b;
+    BenchmarkResult b;
     b.images.push_back(detImage({det("crack", kBoxA), det("dent", kBoxA)}));
-    const std::vector<std::string> names = collectBatchEvalClassNames(ComparisonTaskMode::Detection, a, b);
+    const std::vector<std::string> names = collectBenchmarkClassNames(ModelTask::Detection, a, b);
     CHECK((names == std::vector<std::string>{"crack", "dent", "scratch"}));
 
-    BatchEvaluationResult c;
+    BenchmarkResult c;
     c.images.push_back(clsImage("dog", "cat"));
     c.images.push_back(clsImage("bird", nullptr));
     const std::vector<std::string> clsNames =
-        collectBatchEvalClassNames(ComparisonTaskMode::Classification, c, BatchEvaluationResult{});
+        collectBenchmarkClassNames(ModelTask::Classification, c, BenchmarkResult{});
     CHECK((clsNames == std::vector<std::string>{"bird", "cat", "dog"}));
 
-    CHECK(collectBatchEvalClassNames(ComparisonTaskMode::Anomaly, a, b).empty());
+    CHECK(collectBenchmarkClassNames(ModelTask::Anomaly, a, b).empty());
 }
 
 void test_disagree_classification() {
-    const auto mode = ComparisonTaskMode::Classification;
-    const BatchImageResult cat = clsImage("cat", nullptr);
-    const BatchImageResult cat2 = clsImage("cat", nullptr, 0.4f);
-    const BatchImageResult dog = clsImage("dog", nullptr);
-    const BatchImageResult none = clsImage(nullptr, nullptr);
+    const auto mode = ModelTask::Classification;
+    const BenchmarkImageResult cat = clsImage("cat", nullptr);
+    const BenchmarkImageResult cat2 = clsImage("cat", nullptr, 0.4f);
+    const BenchmarkImageResult dog = clsImage("dog", nullptr);
+    const BenchmarkImageResult none = clsImage(nullptr, nullptr);
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.modelsDisagreeOnly = true;
     CHECK(!passes(mode, &cat, &cat2, f, false));  // no ground truth needed
     CHECK(passes(mode, &cat, &dog, f, false));
@@ -343,14 +343,14 @@ void test_disagree_classification() {
 }
 
 void test_disagree_detection() {
-    const auto mode = ComparisonTaskMode::Detection;
-    const BatchImageResult one = detImage({det("cat", kBoxA, 0.9f)}, {}, false);
-    const BatchImageResult oneLowConf = detImage({det("cat", kBoxA, 0.3f)}, {}, false);
-    const BatchImageResult extra = detImage({det("cat", kBoxA), det("cat", kBoxFar)}, {}, false);
-    const BatchImageResult otherClass = detImage({det("dog", kBoxA)}, {}, false);
-    const BatchImageResult empty = detImage({}, {}, false);
+    const auto mode = ModelTask::Detection;
+    const BenchmarkImageResult one = detImage({det("cat", kBoxA, 0.9f)}, {}, false);
+    const BenchmarkImageResult oneLowConf = detImage({det("cat", kBoxA, 0.3f)}, {}, false);
+    const BenchmarkImageResult extra = detImage({det("cat", kBoxA), det("cat", kBoxFar)}, {}, false);
+    const BenchmarkImageResult otherClass = detImage({det("dog", kBoxA)}, {}, false);
+    const BenchmarkImageResult empty = detImage({}, {}, false);
 
-    BatchEvalImageFilters f;
+    BenchmarkImageFilters f;
     f.modelsDisagreeOnly = true;
     CHECK(!passes(mode, &one, &oneLowConf, f, false));  // confidence difference alone isn't disagreement
     CHECK(passes(mode, &extra, &one, f, false));        // extra box in A
@@ -361,13 +361,13 @@ void test_disagree_detection() {
 }
 
 void test_confusionCell() {
-    const auto mode = ComparisonTaskMode::Classification;
-    const BatchImageResult catAsDog = clsImage("dog", "cat");
-    const BatchImageResult catAsCat = clsImage("cat", "cat");
-    const BatchImageResult noGt = clsImage("dog", nullptr);
+    const auto mode = ModelTask::Classification;
+    const BenchmarkImageResult catAsDog = clsImage("dog", "cat");
+    const BenchmarkImageResult catAsCat = clsImage("cat", "cat");
+    const BenchmarkImageResult noGt = clsImage("dog", nullptr);
 
-    BatchEvalImageFilters f;
-    f.confusionCell = BatchEvalConfusionCellFilter{"cat", "dog", 0};
+    BenchmarkImageFilters f;
+    f.confusionCell = BenchmarkConfusionCellFilter{"cat", "dog", 0};
     CHECK(passes(mode, &catAsDog, nullptr, f));
     CHECK(!passes(mode, &catAsCat, nullptr, f));
     CHECK(!passes(mode, &noGt, nullptr, f));

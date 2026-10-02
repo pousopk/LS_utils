@@ -57,7 +57,7 @@ cmake -S . -B build && cmake --build build -j && ctest --test-dir build --output
 
 ## Project structure
 
-- `src/manager/` — non-UI state and workers: Label Studio API client, shared task list, labeling, label assistant, dataset browser, generic list filters, ONNX inference, batch evaluation and metrics.
+- `src/manager/` — non-UI state and workers: Label Studio API client, shared task list, labeling, label assistant, dataset browser, generic list filters, ONNX inference, benchmark runs and metrics.
 - `src/widgets/` — the ImGui presentation layer, one file per window/tab.
 - `src/main.cpp` — the main loop.
 - `ui_common/` — generic UI helpers (app shell, GL texture upload, file browser, theme).

@@ -2,47 +2,26 @@
 
 #include <imgui.h>
 
-bool drawModelSlotConfigFields(
-    const std::string& onnxPath,
-    const std::string& classNamesPath,
-    int& inputWidth,
-    int& inputHeight,
-    float* confThreshold,
-    float* nmsThreshold,
-    bool* isObbModel,
-    const std::string& autoDetectStatus,
-    const std::string& loadError,
-    const std::function<void()>& onBrowseModel,
-    const std::function<void()>& onBrowseClasses) {
-    ImGui::TextWrapped("Model: %s", onnxPath.empty() ? "(none)" : onnxPath.c_str());
+void drawModelSlotConfigFields(ModelSlotConfig& slot, const std::function<void()>& onBrowseModel) {
+    ImGui::TextWrapped("Model: %s", slot.onnxPath.empty() ? "(none)" : slot.onnxPath.c_str());
     if (ImGui::Button("Browse Model...") && onBrowseModel) {
         onBrowseModel();
     }
 
-    ImGui::TextWrapped("Classes: %s", classNamesPath.empty() ? "(index only)" : classNamesPath.c_str());
-    if (ImGui::Button("Browse Classes...") && onBrowseClasses) {
-        onBrowseClasses();
+    if (!slot.loadError.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.1f, 0.1f, 1.0f));
+        ImGui::TextWrapped("%s", slot.loadError.c_str());
+        ImGui::PopStyleColor();
     }
-
-    ImGui::InputInt("Input Width", &inputWidth);
-    ImGui::InputInt("Input Height", &inputHeight);
-    if (confThreshold != nullptr && nmsThreshold != nullptr) {
-        ImGui::SliderFloat("Confidence", confThreshold, 0.05f, 0.95f);
-        ImGui::SliderFloat("NMS IoU", nmsThreshold, 0.05f, 0.95f);
+    if (!isModelSlotLoaded(slot)) {
+        return;
     }
-    if (isObbModel != nullptr) {
-        ImGui::Checkbox("OBB model (rotated boxes)", isObbModel);
+    ImGui::TextDisabled("%s", slot.summary.c_str());
+
+    if (slot.task == ModelTask::Detection) {
+        ImGui::SliderFloat("Confidence", &slot.confThreshold, 0.05f, 0.95f);
+        ImGui::SliderFloat("NMS IoU", &slot.nmsThreshold, 0.05f, 0.95f);
+    } else if (slot.task == ModelTask::Anomaly) {
+        ImGui::SliderFloat("Anomaly Threshold", &slot.anomalyThreshold, 0.0f, 1.0f, "%.2f");
     }
-
-    if (!autoDetectStatus.empty()) {
-        ImGui::TextDisabled("%s", autoDetectStatus.c_str());
-    }
-
-    const bool loadClicked = ImGui::Button("Load Model");
-
-    if (!loadError.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", loadError.c_str());
-    }
-
-    return loadClicked;
 }

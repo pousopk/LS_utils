@@ -15,7 +15,7 @@ enum class LabelStudioSessionStatus {
 // Shared, in-memory-only Label Studio connection: one base URL + API
 // token, the project list fetched from it, and one globally active
 // project -- consumed by every window that talks to Label Studio
-// (Labeling, Label Assistant, Timestamp Search, Model Evaluation/Batch)
+// (Labeling, Label Assistant, Timestamp Search, Benchmark)
 // in place of each window's own former baseUrl/projectId/apiToken
 // fields. Not persisted to disk; resets to Disconnected on app restart.
 struct LabelStudioSessionState {

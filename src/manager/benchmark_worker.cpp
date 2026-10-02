@@ -1,17 +1,17 @@
-#include "manager/batch_evaluation_worker.hpp"
+#include "manager/benchmark_worker.hpp"
 
 #include "manager/label_studio_client.hpp"
 
 #include <random>
 
-BatchEvaluationWorker::~BatchEvaluationWorker() {
+BenchmarkWorker::~BenchmarkWorker() {
     requestCancel();
     if (thread_.joinable()) {
         thread_.join();
     }
 }
 
-void BatchEvaluationWorker::start(BatchEvalRunConfig config) {
+void BenchmarkWorker::start(BenchmarkRunConfig config) {
     if (thread_.joinable()) {
         thread_.join();
     }
@@ -28,19 +28,19 @@ void BatchEvaluationWorker::start(BatchEvalRunConfig config) {
         hasResult_ = false;
     }
     running_.store(true);
-    thread_ = std::thread(&BatchEvaluationWorker::run, this, std::move(config));
+    thread_ = std::thread(&BenchmarkWorker::run, this, std::move(config));
 }
 
-void BatchEvaluationWorker::requestCancel() {
+void BenchmarkWorker::requestCancel() {
     cancelRequested_.store(true);
 }
 
-BatchEvalProgress BatchEvaluationWorker::progress() const {
+BenchmarkProgress BenchmarkWorker::progress() const {
     std::lock_guard<std::mutex> lock(phaseMutex_);
-    return BatchEvalProgress{currentSlot_.load(), completed_.load(), total_.load(), phaseLabel_};
+    return BenchmarkProgress{currentSlot_.load(), completed_.load(), total_.load(), phaseLabel_};
 }
 
-bool BatchEvaluationWorker::tryTakeResult(BatchEvalRunResult& out) {
+bool BenchmarkWorker::tryTakeResult(BenchmarkRunResult& out) {
     std::lock_guard<std::mutex> lock(resultMutex_);
     if (!hasResult_) {
         return false;
@@ -50,15 +50,15 @@ bool BatchEvaluationWorker::tryTakeResult(BatchEvalRunResult& out) {
     return true;
 }
 
-void BatchEvaluationWorker::finish(BatchEvalRunResult result) {
+void BenchmarkWorker::finish(BenchmarkRunResult result) {
     std::lock_guard<std::mutex> lock(resultMutex_);
     latestResult_ = std::move(result);
     hasResult_ = true;
     running_.store(false);
 }
 
-void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
-    if (config.source == BatchEvalSourceMode::LabelStudioProject) {
+void BenchmarkWorker::run(BenchmarkRunConfig config) {
+    if (config.source == BenchmarkSourceMode::LabelStudioProject) {
         {
             std::lock_guard<std::mutex> lock(phaseMutex_);
             phaseLabel_ = "Downloading";
@@ -76,13 +76,13 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
             config.labelStudioDataImageKey, config.scratchFolderPath, onDownloadProgress, &cancelRequested_);
 
         if (cancelRequested_.load()) {
-            BatchEvalRunResult result;
+            BenchmarkRunResult result;
             result.cancelled = true;
             finish(std::move(result));
             return;
         }
         if (!dataset.error.empty()) {
-            BatchEvalRunResult result;
+            BenchmarkRunResult result;
             result.slotA.error = dataset.error;
             finish(std::move(result));
             return;
@@ -103,7 +103,7 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
     // and B must be evaluated against the identical random subset or their
     // results aren't comparable.
     const unsigned sampleSeed = std::random_device{}();
-    BatchEvalRunResult result;
+    BenchmarkRunResult result;
 
     currentSlot_.store(1);
     completed_.store(0);
@@ -112,20 +112,20 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
         completed_.store(completed);
         total_.store(total);
     };
-    if (config.mode == ComparisonTaskMode::Detection) {
-        result.slotA = runDetectionBatchEvaluation(
+    if (config.mode == ModelTask::Detection) {
+        result.slotA = runDetectionBenchmark(
             config.imageFolderPath, groundTruth,
             [&](const cv::Mat& frame) {
                 return config.detectionModelA->infer(frame, config.confThresholdA, config.nmsThresholdA);
             },
             onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
-    } else if (config.mode == ComparisonTaskMode::Classification) {
-        result.slotA = runClassificationBatchEvaluation(
+    } else if (config.mode == ModelTask::Classification) {
+        result.slotA = runClassificationBenchmark(
             config.imageFolderPath, groundTruth,
             [&](const cv::Mat& frame) { return config.classificationModelA->infer(frame); },
             onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
     } else {
-        result.slotA = runAnomalyBatchEvaluation(
+        result.slotA = runAnomalyBenchmark(
             config.imageFolderPath, groundTruth,
             [&](const cv::Mat& frame) { return config.anomalyModelA->infer(frame, config.anomalyThresholdA); },
             onProgressA, &cancelRequested_, config.sampleSize, sampleSeed);
@@ -139,20 +139,20 @@ void BatchEvaluationWorker::run(BatchEvalRunConfig config) {
             completed_.store(completed);
             total_.store(total);
         };
-        if (config.mode == ComparisonTaskMode::Detection) {
-            result.slotB = runDetectionBatchEvaluation(
+        if (config.mode == ModelTask::Detection) {
+            result.slotB = runDetectionBenchmark(
                 config.imageFolderPath, groundTruth,
                 [&](const cv::Mat& frame) {
                     return config.detectionModelB->infer(frame, config.confThresholdB, config.nmsThresholdB);
                 },
                 onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);
-        } else if (config.mode == ComparisonTaskMode::Classification) {
-            result.slotB = runClassificationBatchEvaluation(
+        } else if (config.mode == ModelTask::Classification) {
+            result.slotB = runClassificationBenchmark(
                 config.imageFolderPath, groundTruth,
                 [&](const cv::Mat& frame) { return config.classificationModelB->infer(frame); },
                 onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);
         } else {
-            result.slotB = runAnomalyBatchEvaluation(
+            result.slotB = runAnomalyBenchmark(
                 config.imageFolderPath, groundTruth,
                 [&](const cv::Mat& frame) { return config.anomalyModelB->infer(frame, config.anomalyThresholdB); },
                 onProgressB, &cancelRequested_, config.sampleSize, sampleSeed);

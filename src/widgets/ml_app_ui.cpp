@@ -16,9 +16,7 @@ void MlAppUi::update() {
         updateSharedLabelStudioProjectData(labelStudioProjectData, labelStudioSession);
     }
     if (showModelsWindow) {
-        updateBatchRuntime(
-            modelEvaluationState.taskMode, modelEvaluationState.slots, modelEvaluationState.batch.imageFolderPath,
-            modelEvaluationState.batch, labelStudioSession);
+        updateBenchmarkState(benchmarkState, labelStudioSession);
         updateLabelAssistantState(labelAssistantState, labelStudioSession, labelStudioProjectData);
     }
     if (showLabelStudioWindow) {

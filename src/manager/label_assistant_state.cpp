@@ -9,14 +9,19 @@
 #include <filesystem>
 
 void loadLabelAssistantModel(LabelAssistantState& state) {
-    loadModelSlot(state.modelConfig, state.taskMode);
-}
-
-void applyLabelAssistantAutoDetect(LabelAssistantState& state) {
-    applyAutoDetectToModelSlot(state.modelConfig, state.taskMode);
-    if (state.taskMode == ComparisonTaskMode::Anomaly) {
-        state.taskMode = ComparisonTaskMode::Classification;
-        state.modelConfig.autoDetectStatus += " (Anomaly not supported here; defaulted to Classification)";
+    ModelSlotConfig& slot = state.modelConfig;
+    loadModelSlot(slot);
+    if (slot.anomalyModel) {
+        slot.anomalyModel.reset();
+        slot.summary.clear();
+        slot.loadError = "Anomaly models aren't supported in Label Assistant";
+        return;
+    }
+    if (isModelSlotLoaded(slot) && slot.task != state.taskMode) {
+        state.taskMode = slot.task;
+        state.runState = LabelAssistantRunState::NotStarted;
+        state.result = LabelAssistantResult{};
+        state.selectedImageFilename.reset();
     }
 }
 
@@ -103,7 +108,7 @@ void syncLabelAssistantSelectedPreview(LabelAssistantState& state) {
     }
 
     cv::Mat toUpload = frame;
-    if (state.taskMode == ComparisonTaskMode::Detection) {
+    if (state.taskMode == ModelTask::Detection) {
         const DraftDetectionLabel* draft = findDetectionDraft(state.result, *state.selectedImageFilename);
         if (draft != nullptr) {
             toUpload = annotateDetections(frame, toDetections(*draft));
@@ -117,7 +122,7 @@ void syncLabelAssistantSelectedPreview(LabelAssistantState& state) {
 }
 
 std::string buildControlTagKey(const LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
-    return sharedData.lastFetchKey + "|" + (state.taskMode == ComparisonTaskMode::Detection ? "D" : "C");
+    return sharedData.lastFetchKey + "|" + (state.taskMode == ModelTask::Detection ? "D" : "C");
 }
 
 void syncLabelAssistantControlTag(LabelAssistantState& state, const SharedLabelStudioProjectData& sharedData) {
@@ -206,7 +211,7 @@ struct DraftPrediction {
 std::vector<DraftPrediction> buildDraftPredictions(const LabelAssistantState& state) {
     std::vector<DraftPrediction> draftPredictions;
 
-    if (state.taskMode == ComparisonTaskMode::Classification) {
+    if (state.taskMode == ModelTask::Classification) {
         draftPredictions.reserve(state.result.classificationDrafts.size());
         for (const auto& draft : state.result.classificationDrafts) {
             draftPredictions.push_back(DraftPrediction{
@@ -265,7 +270,7 @@ void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const Lab
 
 std::vector<LabelAssistantImageEntry> buildLabelAssistantImageEntries(const LabelAssistantState& state) {
     std::vector<LabelAssistantImageEntry> entries;
-    if (state.taskMode == ComparisonTaskMode::Classification) {
+    if (state.taskMode == ModelTask::Classification) {
         entries.reserve(state.result.classificationDrafts.size());
         for (const auto& draft : state.result.classificationDrafts) {
             entries.push_back(LabelAssistantImageEntry{draft.imageFilename, draft.confidence, draft.predictedLabel});

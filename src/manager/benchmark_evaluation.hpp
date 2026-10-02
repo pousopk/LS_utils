@@ -32,25 +32,25 @@ TimingStats computeTimingStats(std::vector<double> inferenceMsSamples);
 // 1024x1024 float heatmap is 4MB; keeping one per image for a whole
 // batch run would balloon memory). The full heatmap is recomputed on
 // demand for preview only.
-struct BatchAnomalyResult {
+struct BenchmarkAnomalyResult {
     float rawScore = 0.0f;
     float score = 0.0f;
     bool isAnomalous = false;
 };
 
-struct BatchImageResult {
+struct BenchmarkImageResult {
     std::string imageFilename;
     std::vector<Detection> detections;              // Detection mode
     std::vector<GroundTruthBox> groundTruthBoxes;    // Detection mode, matched ground truth (empty if none)
     std::vector<ClassPrediction> predictions;        // Classification mode
     std::string groundTruthLabel;                    // Classification mode, matched ground truth (empty if none)
-    std::optional<BatchAnomalyResult> anomalyResult;  // Anomaly mode
+    std::optional<BenchmarkAnomalyResult> anomalyResult;  // Anomaly mode
     double inferenceMs = 0.0;
     bool hasGroundTruth = false;
 };
 
-struct BatchEvaluationResult {
-    std::vector<BatchImageResult> images;
+struct BenchmarkResult {
+    std::vector<BenchmarkImageResult> images;
     TimingStats timing;
     int imagesFound = 0;
     int imagesWithGroundTruth = 0;
@@ -80,7 +80,7 @@ std::vector<std::filesystem::path> sampleImageFiles(
 // `error` left empty (a cancelled run is not a hard failure). Callers
 // comparing two models against the same run must pass the same `sampleSeed`
 // to both calls, or they'll be evaluated on different random subsets.
-BatchEvaluationResult runDetectionBatchEvaluation(
+BenchmarkResult runDetectionBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
@@ -89,7 +89,7 @@ BatchEvaluationResult runDetectionBatchEvaluation(
     int sampleSize = 0,
     unsigned sampleSeed = 0);
 
-BatchEvaluationResult runClassificationBatchEvaluation(
+BenchmarkResult runClassificationBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
@@ -99,10 +99,10 @@ BatchEvaluationResult runClassificationBatchEvaluation(
     unsigned sampleSeed = 0);
 
 // groundTruth is accepted for signature symmetry with the other two
-// run*BatchEvaluation functions (and to avoid a signature change when
+// run*Benchmark functions (and to avoid a signature change when
 // sub-project 2 adds anomaly ground truth) but is unused this
 // sub-project -- Anomaly mode has no ground truth ingestion yet.
-BatchEvaluationResult runAnomalyBatchEvaluation(
+BenchmarkResult runAnomalyBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<AnomalyResult(const cv::Mat&)>& infer,
@@ -111,8 +111,8 @@ BatchEvaluationResult runAnomalyBatchEvaluation(
     int sampleSize = 0,
     unsigned sampleSeed = 0);
 
-// Convenience conversions from a BatchEvaluationResult's per-image data
+// Convenience conversions from a BenchmarkResult's per-image data
 // into the metrics functions' input shape (only images with ground truth
 // contribute).
-std::vector<DetectionEvaluationItem> toDetectionEvaluationItems(const BatchEvaluationResult& result);
-std::vector<ClassificationEvaluationItem> toClassificationEvaluationItems(const BatchEvaluationResult& result);
+std::vector<DetectionEvaluationItem> toDetectionEvaluationItems(const BenchmarkResult& result);
+std::vector<ClassificationEvaluationItem> toClassificationEvaluationItems(const BenchmarkResult& result);

@@ -6,7 +6,7 @@
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/labeling_state.hpp"
-#include "manager/model_evaluation_state.hpp"
+#include "manager/benchmark_state.hpp"
 
 #include <optional>
 
@@ -37,7 +37,7 @@ enum class MainTab {
 // startup; the Window menu reopens them.
 struct MlAppUi {
     bool showModelsWindow = true;
-    ModelEvaluationState modelEvaluationState;
+    BenchmarkState benchmarkState;
     // Which Models sub-tab to force-select on the next draw (consumed and cleared by drawModelsTab).
     std::optional<ModelsTab> pendingModelsTab;
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "manager/classification_inference.hpp"
-#include "manager/comparison_task_mode.hpp"
+#include "manager/model_task.hpp"
 #include "manager/label_assistant.hpp"
 #include "manager/label_studio_client.hpp"
 #include "manager/yolo_inference.hpp"
@@ -21,7 +21,7 @@ enum class LabelAssistantSourceMode {
 };
 
 struct LabelAssistantRunConfig {
-    ComparisonTaskMode mode;
+    ModelTask mode;
     std::shared_ptr<YoloModel> detectionModel;               // set when mode == Detection
     std::shared_ptr<ClassificationModel> classificationModel; // set when mode == Classification
     float confThreshold = 0.25f;
@@ -59,7 +59,7 @@ struct LabelAssistantRunResult {
 // Runs a label-assistant job on a single background thread, reporting
 // live progress and honoring cancellation. Not copyable. Reuse one
 // instance across runs -- start() joins any previous thread first.
-// Mirrors BatchEvaluationWorker's exact shape, minus the two-slot
+// Mirrors BenchmarkWorker's exact shape, minus the two-slot
 // machinery (one model, one run). In LabelStudioProject source mode,
 // run() does two sequential phases -- download (via
 // downloadUnlabeledTaskImages, given the already-selected task list in

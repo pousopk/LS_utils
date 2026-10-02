@@ -1,9 +1,9 @@
 #pragma once
 
 #include "manager/anomaly_inference.hpp"
-#include "manager/batch_evaluation.hpp"
+#include "manager/benchmark_evaluation.hpp"
 #include "manager/classification_inference.hpp"
-#include "manager/comparison_task_mode.hpp"
+#include "manager/model_task.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <atomic>
@@ -15,15 +15,15 @@
 // Where a batch run's images (and, in LabelStudioProject mode, ground
 // truth) come from. LabelStudioProject adds a download+parse phase ahead
 // of the same per-slot evaluation phase LocalFolder already used.
-enum class BatchEvalSourceMode {
+enum class BenchmarkSourceMode {
     LocalFolder,
     LabelStudioProject,
 };
 
-struct BatchEvalRunConfig {
-    ComparisonTaskMode mode = ComparisonTaskMode::Detection;
+struct BenchmarkRunConfig {
+    ModelTask mode = ModelTask::Detection;
 
-    BatchEvalSourceMode source = BatchEvalSourceMode::LocalFolder;
+    BenchmarkSourceMode source = BenchmarkSourceMode::LocalFolder;
 
     // LocalFolder: the folder to scan directly, and (if hasGroundTruth) a
     // manually-exported ground truth already parsed by the caller.
@@ -62,16 +62,16 @@ struct BatchEvalRunConfig {
     float anomalyThresholdB = 0.5f;
 };
 
-struct BatchEvalProgress {
+struct BenchmarkProgress {
     int currentSlot = 0;  // 0 = not started, 1 = running Model A, 2 = running Model B
     int completed = 0;
     int total = 0;
     std::string phaseLabel;   // "Downloading" during LabelStudioProject's pre-phase; empty otherwise
 };
 
-struct BatchEvalRunResult {
-    BatchEvaluationResult slotA;
-    BatchEvaluationResult slotB;
+struct BenchmarkRunResult {
+    BenchmarkResult slotA;
+    BenchmarkResult slotB;
     bool cancelled = false;
 };
 
@@ -82,17 +82,17 @@ struct BatchEvalRunResult {
 // run() does an extra phase first -- download the project's labeled
 // tasks and their ground truth (via fetchAndDownloadLabeledDataset) --
 // before the same per-slot evaluation phase LocalFolder mode uses,
-// distinguished in BatchEvalProgress via `phaseLabel`.
-class BatchEvaluationWorker {
+// distinguished in BenchmarkProgress via `phaseLabel`.
+class BenchmarkWorker {
 public:
-    BatchEvaluationWorker() = default;
-    ~BatchEvaluationWorker();
+    BenchmarkWorker() = default;
+    ~BenchmarkWorker();
 
-    BatchEvaluationWorker(const BatchEvaluationWorker&) = delete;
-    BatchEvaluationWorker& operator=(const BatchEvaluationWorker&) = delete;
+    BenchmarkWorker(const BenchmarkWorker&) = delete;
+    BenchmarkWorker& operator=(const BenchmarkWorker&) = delete;
 
     // Joins any prior run, then starts a new background run with `config`.
-    void start(BatchEvalRunConfig config);
+    void start(BenchmarkRunConfig config);
 
     bool isRunning() const { return running_.load(); }
 
@@ -101,16 +101,16 @@ public:
     void requestCancel();
 
     // Lock-free snapshot of current progress -- safe to call every frame.
-    BatchEvalProgress progress() const;
+    BenchmarkProgress progress() const;
 
     // Non-blocking poll:
     // returns true and moves the result out exactly once, on the frame
     // after the run finishes (normally or via cancel).
-    bool tryTakeResult(BatchEvalRunResult& out);
+    bool tryTakeResult(BenchmarkRunResult& out);
 
 private:
-    void run(BatchEvalRunConfig config);
-    void finish(BatchEvalRunResult result);
+    void run(BenchmarkRunConfig config);
+    void finish(BenchmarkRunResult result);
 
     std::thread thread_;
     std::atomic<int> currentSlot_{0};
@@ -124,5 +124,5 @@ private:
 
     mutable std::mutex resultMutex_;
     bool hasResult_ = false;
-    BatchEvalRunResult latestResult_;
+    BenchmarkRunResult latestResult_;
 };

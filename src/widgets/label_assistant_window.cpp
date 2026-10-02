@@ -18,26 +18,6 @@
 
 namespace {
 
-void drawTaskModeToggle(LabelAssistantState& state) {
-    auto switchTo = [&state](ComparisonTaskMode mode) {
-        if (state.taskMode == mode) {
-            return;
-        }
-        state.taskMode = mode;
-        state.runState = LabelAssistantRunState::NotStarted;
-        state.result = LabelAssistantResult{};
-        state.selectedImageFilename.reset();
-    };
-
-    if (ImGui::RadioButton("Detection", state.taskMode == ComparisonTaskMode::Detection)) {
-        switchTo(ComparisonTaskMode::Detection);
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Classification", state.taskMode == ComparisonTaskMode::Classification)) {
-        switchTo(ComparisonTaskMode::Classification);
-    }
-}
-
 void drawSourceModeToggle(LabelAssistantState& state) {
     auto switchTo = [&state](LabelAssistantSourceMode mode) {
         if (state.sourceMode == mode) {
@@ -62,32 +42,10 @@ void drawSourceModeToggle(LabelAssistantState& state) {
 }
 
 void drawModelConfig(LabelAssistantState& state) {
-    float* confThreshold =
-        (state.taskMode == ComparisonTaskMode::Detection) ? &state.modelConfig.confThreshold : nullptr;
-    float* nmsThreshold =
-        (state.taskMode == ComparisonTaskMode::Detection) ? &state.modelConfig.nmsThreshold : nullptr;
-
-    const bool loadClicked = drawModelSlotConfigFields(
-        state.modelConfig.onnxPath, state.modelConfig.classNamesPath, state.modelConfig.inputWidth,
-        state.modelConfig.inputHeight, confThreshold, nmsThreshold, &state.modelConfig.isObbDetectionModel,
-        state.modelConfig.autoDetectStatus, state.modelConfig.loadError,
-        [&state]() {
-            state.filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
-            openPathPicker(state.picker, PathPickerMode::File, "Pick ONNX Model", state.modelConfig.onnxPath);
-        },
-        [&state]() {
-            state.filePickerTarget = LabelAssistantFilePickerTarget::ClassNamesFile;
-            openPathPicker(
-                state.picker, PathPickerMode::File, "Pick Class Names File", state.modelConfig.classNamesPath);
-        });
-
-    if (!state.modelConfig.engineStatus.empty()) {
-        ImGui::TextDisabled("%s", state.modelConfig.engineStatus.c_str());
-    }
-
-    if (loadClicked) {
-        loadLabelAssistantModel(state);
-    }
+    drawModelSlotConfigFields(state.modelConfig, [&state]() {
+        state.filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
+        openPathPicker(state.picker, PathPickerMode::File, "Pick ONNX Model", state.modelConfig.onnxPath);
+    });
 }
 
 void drawFolderPicker(LabelAssistantState& state) {
@@ -124,9 +82,7 @@ void drawRunBar(
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Run cancelled.");
     }
 
-    const bool modelLoaded = state.taskMode == ComparisonTaskMode::Detection
-        ? state.modelConfig.detectionModel != nullptr
-        : state.modelConfig.classificationModel != nullptr;
+    const bool modelLoaded = isModelSlotLoaded(state.modelConfig);
     const bool sourceReady = state.sourceMode == LabelAssistantSourceMode::LocalFolder
         ? !state.imageFolderPath.empty()
         : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty() && sharedData.loaded;
@@ -148,7 +104,7 @@ void drawRunBar(
 }
 
 void drawResultsSummary(const LabelAssistantState& state) {
-    const int drafted = state.taskMode == ComparisonTaskMode::Classification
+    const int drafted = state.taskMode == ModelTask::Classification
         ? static_cast<int>(state.result.classificationDrafts.size())
         : static_cast<int>(state.result.detectionDrafts.size());
     ImGui::Text("Images processed: %d   Drafted: %d", state.result.imagesProcessed, drafted);
@@ -204,7 +160,7 @@ void drawSelectedImageDetail(LabelAssistantState& state) {
         ImGui::TextDisabled("No preview.");
     }
 
-    if (state.taskMode == ComparisonTaskMode::Classification) {
+    if (state.taskMode == ModelTask::Classification) {
         for (const auto& draft : state.result.classificationDrafts) {
             if (draft.imageFilename == *state.selectedImageFilename) {
                 ImGui::Text("Predicted: %s (%.1f%%)", draft.predictedLabel.c_str(), draft.confidence * 100.0f);
@@ -242,12 +198,12 @@ void drawExportSection(
     }
 
     ImGui::InputText(
-        state.taskMode == ComparisonTaskMode::Classification ? "from_name (choices)"
+        state.taskMode == ModelTask::Classification ? "from_name (choices)"
                                                                : "from_name (rectanglelabels)",
         &state.labelFromName);
     ImGui::InputText("to_name", &state.imageToName);
 
-    if (state.taskMode == ComparisonTaskMode::Detection) {
+    if (state.taskMode == ModelTask::Detection) {
         ImGui::Checkbox("Include images with no detections", &state.includeZeroDetectionImages);
     }
 
@@ -267,7 +223,7 @@ void drawExportSection(
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Push cancelled.");
     }
 
-    const bool hasDrafts = state.taskMode == ComparisonTaskMode::Classification
+    const bool hasDrafts = state.taskMode == ModelTask::Classification
         ? !state.result.classificationDrafts.empty()
         : !state.result.detectionDrafts.empty();
     const bool canPush = hasDrafts && !session.baseUrl.empty() && session.activeProjectId > 0
@@ -296,10 +252,7 @@ void drawPickerPopup(LabelAssistantState& state) {
             break;
         case LabelAssistantFilePickerTarget::OnnxModel:
             state.modelConfig.onnxPath = picked->string();
-            applyLabelAssistantAutoDetect(state);
-            break;
-        case LabelAssistantFilePickerTarget::ClassNamesFile:
-            state.modelConfig.classNamesPath = picked->string();
+            loadLabelAssistantModel(state);
             break;
     }
 }
@@ -309,9 +262,6 @@ void drawPickerPopup(LabelAssistantState& state) {
 void drawLabelAssistantTabContent(
     LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
     const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow) {
-    drawTaskModeToggle(state);
-    ImGui::Separator();
-
     drawModelConfig(state);
     ImGui::Separator();
 

@@ -5,7 +5,7 @@
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_push_worker.hpp"
 #include "manager/label_studio_session.hpp"
-#include "manager/model_evaluation_state.hpp"
+#include "manager/model_slot.hpp"
 #include "manager/onnx_metadata.hpp"
 #include "ui_common/path_picker.hpp"
 
@@ -36,15 +36,13 @@ enum class LabelAssistantPushState {
 enum class LabelAssistantFilePickerTarget {
     ImageFolder,
     OnnxModel,
-    ClassNamesFile,
 };
 
 struct LabelAssistantState {
-    // This window only offers Detection/Classification in its UI, never
-    // Anomaly, even though ComparisonTaskMode (reused from Model
-    // Evaluation) has a third value -- see applyLabelAssistantAutoDetect.
-    ComparisonTaskMode taskMode = ComparisonTaskMode::Classification;
-    ModelSlotConfig modelConfig;   // reused from model_evaluation_state.hpp
+    // Follows the loaded model's task (see loadLabelAssistantModel) --
+    // only ever Detection or Classification; anomaly models are refused.
+    ModelTask taskMode = ModelTask::Classification;
+    ModelSlotConfig modelConfig;   // shared with Benchmark, see model_slot.hpp
 
     // LocalFolder: imageFolderPath is user-picked (see picker
     // below). LabelStudioProject: startLabelAssistantRun sets
@@ -108,8 +106,8 @@ struct LabelAssistantState {
 
 // One row per drafted image, mode-agnostic so the list/sort/filter code
 // below doesn't need to branch on taskMode. Detection's confidence is the
-// mean across that image's boxes, matching batchEvalImageConfidence's
-// existing convention (model_evaluation_state.hpp) for the same class of
+// mean across that image's boxes, matching benchmarkImageConfidence's
+// existing convention (benchmark_filters.hpp) for the same class of
 // "one representative confidence per image" need.
 struct LabelAssistantImageEntry {
     std::string filename;
@@ -127,16 +125,11 @@ std::vector<const LabelAssistantImageEntry*> filterLabelAssistantEntries(
     const std::vector<LabelAssistantImageEntry>& entries, const TextSearch& search, const ConfidenceFilter& confidence,
     ConfidenceSort sort);
 
-// (Re)loads state.modelConfig's model per state.taskMode. Thin wrapper
-// around the shared loadModelSlot(ModelSlotConfig&, ComparisonTaskMode).
+// (Re)loads state.modelConfig from its onnxPath via the shared
+// loadModelSlot, refusing anomaly models (unsupported here). On success,
+// state.taskMode follows the model's task, clearing any previous result
+// if that changes it.
 void loadLabelAssistantModel(LabelAssistantState& state);
-
-// Runs auto-detect on state.modelConfig.onnxPath via the shared
-// applyAutoDetectToModelSlot. Since this window's UI only supports
-// Detection/Classification, a suggested Anomaly mode is not applied as-is:
-// state.taskMode falls back to Classification instead, with a note
-// appended to modelConfig.autoDetectStatus explaining why.
-void applyLabelAssistantAutoDetect(LabelAssistantState& state);
 
 // Builds a LabelAssistantRunConfig from state.modelConfig/taskMode/
 // sourceMode plus session's connection info, clears any previous result,

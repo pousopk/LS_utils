@@ -1,28 +1,14 @@
 #pragma once
 
-#include <functional>
-#include <string>
+#include "manager/model_slot.hpp"
 
-// Draws the model-slot configuration block shared by the live model
-// comparison window and the batch evaluation window: model/class-name
-// paths with Browse buttons (the caller supplies onBrowseModel/
-// onBrowseClasses to open its own file-picker popup, since each window
-// owns its own picker state), input width/height fields, and -- when
-// confThreshold/nmsThreshold are both non-null -- confidence/NMS
-// threshold sliders (detection mode only), and -- when isObbModel is
-// non-null -- an "OBB model (rotated boxes)" checkbox (detection mode
-// only). Displays autoDetectStatus/loadError below when non-empty.
-// Returns true on the frame "Load Model" is clicked; the caller performs
-// the actual load.
-bool drawModelSlotConfigFields(
-    const std::string& onnxPath,
-    const std::string& classNamesPath,
-    int& inputWidth,
-    int& inputHeight,
-    float* confThreshold,
-    float* nmsThreshold,
-    bool* isObbModel,
-    const std::string& autoDetectStatus,
-    const std::string& loadError,
-    const std::function<void()>& onBrowseModel,
-    const std::function<void()>& onBrowseClasses);
+#include <functional>
+
+// Draws the model-slot block shared by the Benchmark and Label Assistant
+// tabs: the model path with a Browse button (the caller supplies
+// onBrowseModel to open its own file-picker popup, and loads the model
+// itself once a file is picked), the loaded model's one-line summary or
+// load error, and the run-time thresholds for the loaded model's task
+// (confidence/NMS for detection, anomaly threshold for anomaly).
+// Everything else about the model is read from the ONNX file.
+void drawModelSlotConfigFields(ModelSlotConfig& slot, const std::function<void()>& onBrowseModel);

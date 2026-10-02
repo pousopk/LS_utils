@@ -36,7 +36,7 @@ std::vector<std::filesystem::path> listImageFiles(const std::string& folderPath)
 
 LabelAssistantResult runAutoLabel(
     const std::string& imageFolderPath,
-    ComparisonTaskMode mode,
+    ModelTask mode,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& classify,
     const std::function<std::vector<Detection>(const cv::Mat&)>& detect,
     const std::function<void(int completed, int total)>& onProgress,
@@ -62,7 +62,7 @@ LabelAssistantResult runAutoLabel(
         }
         completed++;
 
-        if (mode == ComparisonTaskMode::Classification) {
+        if (mode == ModelTask::Classification) {
             const std::vector<ClassPrediction> predictions = classify(frame);
             if (!predictions.empty()) {
                 DraftClassificationLabel draft;

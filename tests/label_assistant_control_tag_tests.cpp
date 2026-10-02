@@ -22,7 +22,7 @@ void test_resolveLabelAssistantControlTag_findsRectangleLabelsForDetection() {
         LabelStudioControlTag{LabelStudioControlTagType::Choices, "choice_label", "image", {"Cat"}},
         LabelStudioControlTag{LabelStudioControlTagType::RectangleLabels, "rect_label", "image", {"Cat", "Dog"}},
     };
-    const auto resolution = resolveLabelAssistantControlTag(controlTags, ComparisonTaskMode::Detection);
+    const auto resolution = resolveLabelAssistantControlTag(controlTags, ModelTask::Detection);
     CHECK(resolution.error.empty());
     CHECK(resolution.fromName == "rect_label");
     CHECK(resolution.toName == "image");
@@ -32,7 +32,7 @@ void test_resolveLabelAssistantControlTag_findsChoicesForClassification() {
     const std::vector<LabelStudioControlTag> controlTags = {
         LabelStudioControlTag{LabelStudioControlTagType::Choices, "choice_label", "image", {"Cat"}},
     };
-    const auto resolution = resolveLabelAssistantControlTag(controlTags, ComparisonTaskMode::Classification);
+    const auto resolution = resolveLabelAssistantControlTag(controlTags, ModelTask::Classification);
     CHECK(resolution.error.empty());
     CHECK(resolution.fromName == "choice_label");
     CHECK(resolution.toName == "image");
@@ -42,7 +42,7 @@ void test_resolveLabelAssistantControlTag_setsErrorWhenNoMatchingTagType() {
     const std::vector<LabelStudioControlTag> controlTags = {
         LabelStudioControlTag{LabelStudioControlTagType::Choices, "choice_label", "image", {"Cat"}},
     };
-    const auto resolution = resolveLabelAssistantControlTag(controlTags, ComparisonTaskMode::Detection);
+    const auto resolution = resolveLabelAssistantControlTag(controlTags, ModelTask::Detection);
     CHECK(!resolution.error.empty());
     CHECK(resolution.fromName.empty());
     CHECK(resolution.toName.empty());
@@ -53,7 +53,7 @@ void test_resolveLabelAssistantControlTag_firstMatchingTagWinsWhenDuplicated() {
         LabelStudioControlTag{LabelStudioControlTagType::RectangleLabels, "first", "image", {}},
         LabelStudioControlTag{LabelStudioControlTagType::RectangleLabels, "second", "image", {}},
     };
-    const auto resolution = resolveLabelAssistantControlTag(controlTags, ComparisonTaskMode::Detection);
+    const auto resolution = resolveLabelAssistantControlTag(controlTags, ModelTask::Detection);
     CHECK(resolution.fromName == "first");
 }
 

@@ -2,7 +2,7 @@
 
 #include "widgets/label_assistant_window.hpp"
 #include "widgets/ml_app_ui.hpp"
-#include "widgets/model_evaluation_window.hpp"
+#include "widgets/benchmark_tab.hpp"
 
 #include <imgui.h>
 
@@ -24,7 +24,7 @@ void drawModelsTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
             benchmarkFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Benchmark", nullptr, benchmarkFlags)) {
-            drawBenchmarkTabContent(ui.modelEvaluationState, ui.labelStudioSession, onOpenConnectionTab);
+            drawBenchmarkTabContent(ui.benchmarkState, ui.labelStudioSession, onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 

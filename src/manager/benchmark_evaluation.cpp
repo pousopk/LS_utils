@@ -1,4 +1,4 @@
-#include "manager/batch_evaluation.hpp"
+#include "manager/benchmark_evaluation.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -90,7 +90,7 @@ TimingStats computeTimingStats(std::vector<double> inferenceMsSamples) {
     return stats;
 }
 
-BatchEvaluationResult runDetectionBatchEvaluation(
+BenchmarkResult runDetectionBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
@@ -98,7 +98,7 @@ BatchEvaluationResult runDetectionBatchEvaluation(
     const std::atomic<bool>* cancelRequested,
     int sampleSize,
     unsigned sampleSeed) {
-    BatchEvaluationResult result;
+    BenchmarkResult result;
 
     auto files = listImageFiles(imageFolderPath);
     if (files.empty()) {
@@ -120,7 +120,7 @@ BatchEvaluationResult runDetectionBatchEvaluation(
         }
         result.imagesFound++;
 
-        BatchImageResult imageResult;
+        BenchmarkImageResult imageResult;
         imageResult.imageFilename = path.filename().string();
 
         const auto startedAt = std::chrono::steady_clock::now();
@@ -157,7 +157,7 @@ BatchEvaluationResult runDetectionBatchEvaluation(
     return result;
 }
 
-BatchEvaluationResult runClassificationBatchEvaluation(
+BenchmarkResult runClassificationBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
@@ -165,7 +165,7 @@ BatchEvaluationResult runClassificationBatchEvaluation(
     const std::atomic<bool>* cancelRequested,
     int sampleSize,
     unsigned sampleSeed) {
-    BatchEvaluationResult result;
+    BenchmarkResult result;
 
     auto files = listImageFiles(imageFolderPath);
     if (files.empty()) {
@@ -187,7 +187,7 @@ BatchEvaluationResult runClassificationBatchEvaluation(
         }
         result.imagesFound++;
 
-        BatchImageResult imageResult;
+        BenchmarkImageResult imageResult;
         imageResult.imageFilename = path.filename().string();
 
         const auto startedAt = std::chrono::steady_clock::now();
@@ -196,7 +196,7 @@ BatchEvaluationResult runClassificationBatchEvaluation(
             std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        // See the matching comment in runDetectionBatchEvaluation -- an
+        // See the matching comment in runDetectionBenchmark -- an
         // untyped-but-reviewed (empty result array) annotation counts as
         // valid classification ground truth (empty label) too, unless it
         // was actually reviewed for detection only.
@@ -217,7 +217,7 @@ BatchEvaluationResult runClassificationBatchEvaluation(
     return result;
 }
 
-BatchEvaluationResult runAnomalyBatchEvaluation(
+BenchmarkResult runAnomalyBenchmark(
     const std::string& imageFolderPath,
     const LabelStudioImportResult* groundTruth,
     const std::function<AnomalyResult(const cv::Mat&)>& infer,
@@ -226,7 +226,7 @@ BatchEvaluationResult runAnomalyBatchEvaluation(
     int sampleSize,
     unsigned sampleSeed) {
     (void)groundTruth;  // Anomaly mode has no ground truth ingestion yet (sub-projects 2/3).
-    BatchEvaluationResult result;
+    BenchmarkResult result;
 
     auto files = listImageFiles(imageFolderPath);
     if (files.empty()) {
@@ -248,7 +248,7 @@ BatchEvaluationResult runAnomalyBatchEvaluation(
         }
         result.imagesFound++;
 
-        BatchImageResult imageResult;
+        BenchmarkImageResult imageResult;
         imageResult.imageFilename = path.filename().string();
 
         const auto startedAt = std::chrono::steady_clock::now();
@@ -257,7 +257,7 @@ BatchEvaluationResult runAnomalyBatchEvaluation(
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count();
         timings.push_back(imageResult.inferenceMs);
 
-        BatchAnomalyResult scalarResult;
+        BenchmarkAnomalyResult scalarResult;
         scalarResult.rawScore = anomaly.rawScore;
         scalarResult.score = anomaly.score;
         scalarResult.isAnomalous = anomaly.isAnomalous;
@@ -273,7 +273,7 @@ BatchEvaluationResult runAnomalyBatchEvaluation(
     return result;
 }
 
-std::vector<DetectionEvaluationItem> toDetectionEvaluationItems(const BatchEvaluationResult& result) {
+std::vector<DetectionEvaluationItem> toDetectionEvaluationItems(const BenchmarkResult& result) {
     std::vector<DetectionEvaluationItem> items;
     for (const auto& image : result.images) {
         if (!image.hasGroundTruth) {
@@ -287,7 +287,7 @@ std::vector<DetectionEvaluationItem> toDetectionEvaluationItems(const BatchEvalu
     return items;
 }
 
-std::vector<ClassificationEvaluationItem> toClassificationEvaluationItems(const BatchEvaluationResult& result) {
+std::vector<ClassificationEvaluationItem> toClassificationEvaluationItems(const BenchmarkResult& result) {
     std::vector<ClassificationEvaluationItem> items;
     for (const auto& image : result.images) {
         if (!image.hasGroundTruth || image.predictions.empty()) {

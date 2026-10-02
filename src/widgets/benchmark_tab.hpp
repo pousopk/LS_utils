@@ -1,7 +1,7 @@
 #pragma once
 
 #include "manager/label_studio_session.hpp"
-#include "manager/model_evaluation_state.hpp"
+#include "manager/benchmark_state.hpp"
 
 #include <functional>
 
@@ -9,5 +9,5 @@
 // one or two ONNX models evaluated over a batch of images, with metrics and
 // a per-image drill-down.
 void drawBenchmarkTabContent(
-    ModelEvaluationState& state, const LabelStudioSessionState& session,
+    BenchmarkState& state, const LabelStudioSessionState& session,
     const std::function<void()>& onOpenLabelStudioWindow);

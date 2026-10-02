@@ -1,6 +1,6 @@
 #pragma once
 
-#include "manager/comparison_task_mode.hpp"
+#include "manager/model_task.hpp"
 #include "manager/label_studio_client.hpp"
 
 #include <string>
@@ -24,7 +24,7 @@ struct LabelAssistantControlTagResolution {
 // a plain local lookup with no network call of its own. Sets `error`
 // (leaving fromName/toName empty) if the project has no control tag of
 // the type `mode` needs -- e.g. a Classification-only project selected
-// while `mode` is Detection. `mode` is never ComparisonTaskMode::Anomaly
+// while `mode` is Detection. `mode` is never ModelTask::Anomaly
 // here -- this window's UI only offers Detection/Classification.
 LabelAssistantControlTagResolution resolveLabelAssistantControlTag(
-    const std::vector<LabelStudioControlTag>& controlTags, ComparisonTaskMode mode);
+    const std::vector<LabelStudioControlTag>& controlTags, ModelTask mode);

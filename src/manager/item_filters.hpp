@@ -10,7 +10,7 @@
 #include <vector>
 
 // Filter building blocks shared by every filterable list in the app
-// (Dataset Browser, Model Evaluation's image list, Label Assistant's
+// (Dataset Browser, Benchmark's image list, Label Assistant's
 // drafts). Each block tests one value; each tool composes the blocks it
 // needs into its own spec struct alongside its tool-specific filters.
 // Pure -- no ImGui; the matching controls are in widgets/filter_widgets.

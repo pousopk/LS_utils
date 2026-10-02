@@ -1,7 +1,7 @@
 #pragma once
 
 #include "manager/classification_inference.hpp"
-#include "manager/comparison_task_mode.hpp"
+#include "manager/model_task.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/yolo_inference.hpp"
 
@@ -35,7 +35,7 @@ struct LabelAssistantResult {
 // (a cancelled run is not a hard failure).
 LabelAssistantResult runAutoLabel(
     const std::string& imageFolderPath,
-    ComparisonTaskMode mode,
+    ModelTask mode,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& classify,
     const std::function<std::vector<Detection>(const cv::Mat&)>& detect,
     const std::function<void(int completed, int total)>& onProgress = nullptr,

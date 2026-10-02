@@ -1,7 +1,7 @@
 #pragma once
 
-#include "manager/batch_evaluation.hpp"
-#include "manager/comparison_task_mode.hpp"
+#include "manager/benchmark_evaluation.hpp"
+#include "manager/model_task.hpp"
 #include "manager/detection_metrics.hpp"
 #include "manager/item_filters.hpp"
 #include "manager/label_studio_import.hpp"
@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
-// Pure per-image filter/sort logic for the Model Evaluation window's batch
+// Pure per-image filter/sort logic for the Benchmark tab's
 // image list. Deliberately free of GL/worker/Label Studio dependencies so
-// it can be unit tested on its own (see tests/batch_eval_filters_tests.cpp).
+// it can be unit tested on its own (see tests/benchmark_filters_tests.cpp).
 
 struct DetectionMatch {
     std::vector<bool> predictionMatched;   // per prediction: true = TP, false = FP
@@ -31,7 +31,7 @@ DetectionMatch matchDetections(
 // Detection mode only: which single number summarizes an image's boxes.
 // Mean is the historical behavior; Lowest surfaces uncertain images and
 // Highest surfaces confident false positives.
-enum class BatchEvalConfidenceBasis {
+enum class BenchmarkConfidenceBasis {
     Mean,
     Lowest,
     Highest,
@@ -42,21 +42,21 @@ enum class BatchEvalConfidenceBasis {
 // mean/min/max box confidence per `basis`. std::nullopt if `image` is null
 // or has no prediction/detection/anomaly result. `basis` is ignored
 // outside detection mode.
-std::optional<float> batchEvalImageConfidence(
-    ComparisonTaskMode mode, const BatchImageResult* image, BatchEvalConfidenceBasis basis);
+std::optional<float> benchmarkImageConfidence(
+    ModelTask mode, const BenchmarkImageResult* image, BenchmarkConfidenceBasis basis);
 
 // Sort key for confidence sorting: the lower of the two slots'
 // confidences; a slot with no value is ignored; 0.0f if neither has one
 // (so such images sort first ascending / last descending).
-float batchEvalImageSortConfidence(
-    ComparisonTaskMode mode, const BatchImageResult* imageA, const BatchImageResult* imageB,
-    BatchEvalConfidenceBasis basis);
+float benchmarkImageSortConfidence(
+    ModelTask mode, const BenchmarkImageResult* imageA, const BenchmarkImageResult* imageB,
+    BenchmarkConfidenceBasis basis);
 
 // Which ground-truth errors an image must have to be listed. Detection
 // uses all four; classification only offers Any/AnyError ("Misclassified")
 // -- FalsePositives/Missed are treated as AnyError there. Ignored when the
 // run has no ground truth, and in anomaly mode.
-enum class BatchEvalErrorFilter {
+enum class BenchmarkErrorFilter {
     Any,
     AnyError,
     FalsePositives,
@@ -66,7 +66,7 @@ enum class BatchEvalErrorFilter {
 // A clicked classification confusion-matrix cell: list only images where
 // slot `slotIndex` (0 = model A, 1 = model B) predicted `predictedLabel`
 // for true label `trueLabel`.
-struct BatchEvalConfusionCellFilter {
+struct BenchmarkConfusionCellFilter {
     std::string trueLabel;
     std::string predictedLabel;
     int slotIndex = 0;
@@ -74,19 +74,19 @@ struct BatchEvalConfusionCellFilter {
 
 // Every image-list filter except the filename search. A default-constructed
 // value passes every image.
-struct BatchEvalImageFilters {
-    BatchEvalErrorFilter errorFilter = BatchEvalErrorFilter::Any;
+struct BenchmarkImageFilters {
+    BenchmarkErrorFilter errorFilter = BenchmarkErrorFilter::Any;
     // Also scopes the error filter: with a class set, the error must
     // involve that class.
     ClassFilter cls;
-    BatchEvalConfidenceBasis confidenceBasis = BatchEvalConfidenceBasis::Mean;
+    BenchmarkConfidenceBasis confidenceBasis = BenchmarkConfidenceBasis::Mean;
     ConfidenceFilter confidence;
     // Detection mode only -- Has = at least one detected box. Meaningless
     // for classification (a run always produces a top-1 prediction unless
     // inference itself failed), so it's ignored there.
     PresenceFilter detections;
     bool modelsDisagreeOnly = false;  // compare mode only
-    std::optional<BatchEvalConfusionCellFilter> confusionCell;
+    std::optional<BenchmarkConfusionCellFilter> confusionCell;
 };
 
 // AND over every filter in `filters` for one image. `imageA`/`imageB` are
@@ -94,16 +94,16 @@ struct BatchEvalImageFilters {
 // model mode leaves slot B empty); per-slot filters pass if either
 // non-null slot passes. `hasGroundTruth` is the run-level flag: without it
 // the error filter is ignored.
-bool batchEvalImagePassesFilters(
-    ComparisonTaskMode mode, bool hasGroundTruth,
-    const BatchImageResult* imageA, const BatchImageResult* imageB,
-    const BatchEvalImageFilters& filters);
+bool benchmarkImagePassesFilters(
+    ModelTask mode, bool hasGroundTruth,
+    const BenchmarkImageResult* imageA, const BenchmarkImageResult* imageB,
+    const BenchmarkImageFilters& filters);
 
 // Sorted, de-duplicated class names across both slots' ground truth
 // (boxes / label) and predictions (detections / top-1) -- populates the
 // image list's class filter combo. Empty in anomaly mode.
-std::vector<std::string> collectBatchEvalClassNames(
-    ComparisonTaskMode mode, const BatchEvaluationResult& resultA, const BatchEvaluationResult& resultB);
+std::vector<std::string> collectBenchmarkClassNames(
+    ModelTask mode, const BenchmarkResult& resultA, const BenchmarkResult& resultB);
 
 // Final precision (TP / (TP + FP)) and recall (TP / numGroundTruth) for a
 // class after every prediction is processed -- i.e. at the model's
@@ -113,4 +113,4 @@ std::optional<float> classPrecision(const ClassAveragePrecision& metrics);
 std::optional<float> classRecall(const ClassAveragePrecision& metrics);
 
 // Linear lookup of an image's result by filename; nullptr if absent.
-const BatchImageResult* findBatchImage(const BatchEvaluationResult& result, const std::string& filename);
+const BenchmarkImageResult* findBenchmarkImage(const BenchmarkResult& result, const std::string& filename);
