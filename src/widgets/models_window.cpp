@@ -24,7 +24,7 @@ void drawModelsTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
             benchmarkFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Benchmark", nullptr, benchmarkFlags)) {
-            drawBenchmarkTabContent(ui.benchmarkState, ui.labelStudioSession, onOpenConnectionTab);
+            drawBenchmarkTabContent(ui.benchmarkState, ui.labelStudioSession, ui.labelStudioProjectData, onOpenConnectionTab);
             ImGui::EndTabItem();
         }
 

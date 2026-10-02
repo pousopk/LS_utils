@@ -393,50 +393,6 @@ std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
     return result;
 }
 
-std::vector<LabelStudioLabeledTask> selectLabeledTasks(
-    const nlohmann::json& tasksJson, const std::string& dataImageKey) {
-    std::vector<LabelStudioLabeledTask> result;
-
-    const nlohmann::json* tasks = &tasksJson;
-    if (tasksJson.is_object() && tasksJson.contains("tasks") && tasksJson["tasks"].is_array()) {
-        tasks = &tasksJson["tasks"];
-    }
-    if (!tasks->is_array()) {
-        return result;
-    }
-
-    for (const auto& task : *tasks) {
-        if (!task.contains("id") || !task["id"].is_number_integer()) {
-            continue;
-        }
-
-        int annotationCount = 0;
-        if (task.contains("total_annotations") && task["total_annotations"].is_number_integer()) {
-            annotationCount = task["total_annotations"].get<int>();
-        } else if (task.contains("annotations") && task["annotations"].is_array()) {
-            annotationCount = static_cast<int>(task["annotations"].size());
-        }
-        if (annotationCount <= 0) {
-            continue;
-        }
-
-        if (!task.contains("data") || !task["data"].is_object()) {
-            continue;
-        }
-        const auto& data = task["data"];
-        if (!data.contains(dataImageKey) || !data[dataImageKey].is_string()) {
-            continue;
-        }
-
-        LabelStudioLabeledTask labeled;
-        labeled.taskId = task["id"].get<int>();
-        labeled.imagePath = data[dataImageKey].get<std::string>();
-        result.push_back(std::move(labeled));
-    }
-
-    return result;
-}
-
 std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
     const nlohmann::json& tasksJson, const std::string& dataImageKey) {
     std::vector<LabelStudioTaskSummary> summaries;
@@ -603,6 +559,10 @@ std::vector<LabelStudioUnlabeledTask> selectUnlabeledFromSummaries(const std::ve
         result.push_back(LabelStudioUnlabeledTask{summary.taskId, summary.imagePath});
     }
     return result;
+}
+
+std::string taskImageLocalFilename(int taskId, const std::string& imagePath) {
+    return std::to_string(taskId) + std::filesystem::path(imagePath).extension().string();
 }
 
 std::optional<int> parseTaskIdFromFilename(const std::string& filename) {
@@ -1102,9 +1062,8 @@ LabelStudioTaskImagesDownloadResult downloadUnlabeledTaskImages(
             return result;
         }
 
-        const std::string extension = std::filesystem::path(task.imagePath).extension().string();
         const std::string localPath =
-            (std::filesystem::path(outputFolder) / (std::to_string(task.taskId) + extension)).string();
+            (std::filesystem::path(outputFolder) / taskImageLocalFilename(task.taskId, task.imagePath)).string();
 
         std::string downloadError;
         if (downloadTaskImage(baseUrl, apiToken, task.imagePath, localPath, downloadError)) {
@@ -1186,49 +1145,6 @@ LabelStudioAttachSummary attachPredictionsToKnownTasks(
     }
 
     return summary;
-}
-
-LabelStudioGroundTruthDataset fetchAndDownloadLabeledDataset(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
-    const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested) {
-    LabelStudioGroundTruthDataset result;
-
-    nlohmann::json allTasks;
-    std::string fetchError;
-    if (!fetchAllLabelStudioTasksRaw(baseUrl, projectId, apiToken, allTasks, fetchError)) {
-        result.error = fetchError;
-        return result;
-    }
-
-    result.groundTruth = parseLabelStudioExport(allTasks);
-
-    const std::vector<LabelStudioLabeledTask> labeled = selectLabeledTasks(allTasks, dataImageKey);
-    const int total = static_cast<int>(labeled.size());
-    int completed = 0;
-
-    for (const auto& task : labeled) {
-        if (cancelRequested != nullptr && cancelRequested->load()) {
-            return result;
-        }
-
-        const std::string basename = std::filesystem::path(task.imagePath).filename().string();
-        const std::string localPath = (std::filesystem::path(outputFolder) / basename).string();
-
-        std::string downloadError;
-        if (downloadTaskImage(baseUrl, apiToken, task.imagePath, localPath, downloadError)) {
-            result.downloaded++;
-        } else {
-            result.downloadFailed++;
-        }
-
-        completed++;
-        if (onProgress) {
-            onProgress(completed, total);
-        }
-    }
-
-    return result;
 }
 
 namespace {

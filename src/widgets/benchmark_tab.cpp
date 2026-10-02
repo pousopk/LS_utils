@@ -125,12 +125,13 @@ void drawSampleCheckbox(BenchmarkState& state) {
     }
     if (state.sampleEnabled) {
         ImGui::TextDisabled(
-            "Evaluates a random subset instead of the whole folder -- useful for a quick check on a huge "
-            "dataset.");
+            "Evaluates a random subset instead of every image -- useful for a quick check on a huge "
+            "dataset. In Label Studio mode only the sampled images are downloaded.");
     }
 }
 
-void drawRunBar(BenchmarkState& state, const LabelStudioSessionState& session) {
+void drawRunBar(
+    BenchmarkState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     ImGui::Separator();
     if (state.runState == BenchmarkRunState::Running) {
         const std::string label = !state.lastProgress.phaseLabel.empty()
@@ -156,12 +157,12 @@ void drawRunBar(BenchmarkState& state, const LabelStudioSessionState& session) {
     const bool modelsLoaded = benchmarkSlotsReady(state);
     const bool sourceReady = state.sourceMode == BenchmarkSourceMode::LocalFolder
         ? !state.imageFolderPath.empty()
-        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty();
+        : !session.baseUrl.empty() && session.activeProjectId > 0 && !session.apiToken.empty() && sharedData.loaded;
     const bool canRun = modelsLoaded && sourceReady;
 
     ImGui::BeginDisabled(!canRun);
     if (ImGui::Button("Run")) {
-        startBenchmarkRun(state, session);
+        startBenchmarkRun(state, session, sharedData);
     }
     ImGui::EndDisabled();
     if (!canRun) {
@@ -169,7 +170,7 @@ void drawRunBar(BenchmarkState& state, const LabelStudioSessionState& session) {
             state.compareTwoModels ? "Load two matching models and " : "Load the model and ";
         const char* sourceHint = state.sourceMode == BenchmarkSourceMode::LocalFolder
             ? "pick an image folder to run."
-            : "fill in the Label Studio connection to run.";
+            : "wait for the Label Studio task list to load to run.";
         ImGui::TextDisabled("%s%s", modelsHint, sourceHint);
     }
 }
@@ -636,29 +637,45 @@ void drawSelectedImageDetail(BenchmarkState& state) {
     ImGui::EndChild();
 }
 
+void drawLabelStudioSourceSummary(
+    const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
+    const std::function<void()>& onOpenLabelStudioWindow) {
+    drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
+    drawSharedTaskRangeNote(sharedData);
+    if (sharedData.loading) {
+        ImGui::TextDisabled("%s", describeSharedTaskListLoadProgress(sharedData).c_str());
+    } else if (sharedData.loaded) {
+        ImGui::TextDisabled("%d labeled tasks in the task list.", static_cast<int>(sharedData.groundTruthByTaskId.size()));
+    }
+    if (!sharedData.error.empty()) {
+        ImGui::TextColored(kBadColor, "%s", sharedData.error.c_str());
+    }
+}
+
 void drawRunBody(
-    BenchmarkState& state, const LabelStudioSessionState& session,
+    BenchmarkState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
     const std::function<void()>& onOpenLabelStudioWindow) {
     drawSourceModeToggle(state);
     if (state.sourceMode == BenchmarkSourceMode::LocalFolder) {
         drawLocalFolderAndGroundTruthPickers(state);
     } else {
-        drawLabelStudioSessionSummary(session, onOpenLabelStudioWindow);
-        if (!state.labelStudioAutoFetchStatus.empty()) {
-            ImGui::TextDisabled("%s", state.labelStudioAutoFetchStatus.c_str());
-        }
+        drawLabelStudioSourceSummary(session, sharedData, onOpenLabelStudioWindow);
     }
     drawSampleCheckbox(state);
     ImGui::Separator();
 
-    drawRunBar(state, session);
+    drawRunBar(state, session, sharedData);
 
     if (state.runState == BenchmarkRunState::Complete) {
         ImGui::Separator();
-        if (state.resultA.totalFilesInFolder > state.resultA.imagesFound) {
+        if (!state.resultA.error.empty()) {
+            ImGui::TextColored(kBadColor, "%s", state.resultA.error.c_str());
+            return;
+        }
+        if (state.resultA.totalAvailableImages > state.resultA.imagesFound) {
             ImGui::TextDisabled(
-                "Sampled %d of %d images in the folder.", state.resultA.imagesFound,
-                state.resultA.totalFilesInFolder);
+                "Sampled %d of %d %s.", state.resultA.imagesFound, state.resultA.totalAvailableImages,
+                state.sourceMode == BenchmarkSourceMode::LocalFolder ? "images in the folder" : "labeled tasks");
         }
         drawAggregateMetrics(state);
         ImGui::Separator();
@@ -696,7 +713,7 @@ void drawPickerPopup(BenchmarkState& state) {
 } // namespace
 
 void drawBenchmarkTabContent(
-    BenchmarkState& state, const LabelStudioSessionState& session,
+    BenchmarkState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
     const std::function<void()>& onOpenLabelStudioWindow) {
     drawModelCountToggle(state);
     ImGui::Separator();
@@ -712,7 +729,7 @@ void drawBenchmarkTabContent(
     }
     ImGui::Separator();
 
-    drawRunBody(state, session, onOpenLabelStudioWindow);
+    drawRunBody(state, session, sharedData, onOpenLabelStudioWindow);
 
     drawPickerPopup(state);
 }

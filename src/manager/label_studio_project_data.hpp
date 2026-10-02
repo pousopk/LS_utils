@@ -56,6 +56,7 @@ struct SharedTaskListStaging {
     std::unordered_map<int, size_t> summaryIndexByTaskId;
     std::unordered_map<int, DatasetBoxesToDraw> boxesByTaskId;
     std::unordered_map<int, DatasetEncodedMasks> masksByTaskId;
+    std::unordered_map<int, ImageGroundTruth> groundTruthByTaskId;
 };
 
 struct SharedLabelStudioProjectData {
@@ -63,6 +64,9 @@ struct SharedLabelStudioProjectData {
     std::unordered_map<int, size_t> summaryIndexByTaskId;
     std::unordered_map<int, DatasetBoxesToDraw> boxesByTaskId;
     std::unordered_map<int, DatasetEncodedMasks> masksByTaskId;
+    // Each annotated task's ground truth (first annotation), as Benchmark's
+    // Label Studio source evaluates against it.
+    std::unordered_map<int, ImageGroundTruth> groundTruthByTaskId;
 
     LabelStudioProjectConfig projectConfig;
     std::string rectangleLabelsFromName;   // from_name of the first RectangleLabels tag, if any

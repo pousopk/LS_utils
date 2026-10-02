@@ -19,6 +19,20 @@ bool isImageExtension(const std::filesystem::path& path) {
     return std::find(extensions.begin(), extensions.end(), ext) != extensions.end();
 }
 
+const ImageGroundTruth* findGroundTruth(const LabelStudioImportResult* groundTruth, const std::string& filename) {
+    if (!groundTruth) {
+        return nullptr;
+    }
+    for (const auto& img : groundTruth->images) {
+        if (img.imageFilename == filename) {
+            return &img;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
 std::vector<std::filesystem::path> listImageFiles(const std::string& folderPath) {
     namespace fs = std::filesystem;
     std::vector<fs::path> files;
@@ -34,20 +48,6 @@ std::vector<std::filesystem::path> listImageFiles(const std::string& folderPath)
     std::sort(files.begin(), files.end());
     return files;
 }
-
-const ImageGroundTruth* findGroundTruth(const LabelStudioImportResult* groundTruth, const std::string& filename) {
-    if (!groundTruth) {
-        return nullptr;
-    }
-    for (const auto& img : groundTruth->images) {
-        if (img.imageFilename == filename) {
-            return &img;
-        }
-    }
-    return nullptr;
-}
-
-} // namespace
 
 std::vector<std::filesystem::path> sampleImageFiles(
     std::vector<std::filesystem::path> files, int sampleSize, unsigned seed) {
@@ -91,22 +91,12 @@ TimingStats computeTimingStats(std::vector<double> inferenceMsSamples) {
 }
 
 BenchmarkResult runDetectionBenchmark(
-    const std::string& imageFolderPath,
+    const std::vector<std::filesystem::path>& files,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested,
-    int sampleSize,
-    unsigned sampleSeed) {
+    const std::atomic<bool>* cancelRequested) {
     BenchmarkResult result;
-
-    auto files = listImageFiles(imageFolderPath);
-    if (files.empty()) {
-        result.error = "No recognized image files found in: " + imageFolderPath;
-        return result;
-    }
-    result.totalFilesInFolder = static_cast<int>(files.size());
-    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
 
     const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
@@ -158,22 +148,12 @@ BenchmarkResult runDetectionBenchmark(
 }
 
 BenchmarkResult runClassificationBenchmark(
-    const std::string& imageFolderPath,
+    const std::vector<std::filesystem::path>& files,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested,
-    int sampleSize,
-    unsigned sampleSeed) {
+    const std::atomic<bool>* cancelRequested) {
     BenchmarkResult result;
-
-    auto files = listImageFiles(imageFolderPath);
-    if (files.empty()) {
-        result.error = "No recognized image files found in: " + imageFolderPath;
-        return result;
-    }
-    result.totalFilesInFolder = static_cast<int>(files.size());
-    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
 
     const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;
@@ -218,23 +198,11 @@ BenchmarkResult runClassificationBenchmark(
 }
 
 BenchmarkResult runAnomalyBenchmark(
-    const std::string& imageFolderPath,
-    const LabelStudioImportResult* groundTruth,
+    const std::vector<std::filesystem::path>& files,
     const std::function<AnomalyResult(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress,
-    const std::atomic<bool>* cancelRequested,
-    int sampleSize,
-    unsigned sampleSeed) {
-    (void)groundTruth;  // Anomaly mode has no ground truth ingestion yet (sub-projects 2/3).
+    const std::atomic<bool>* cancelRequested) {
     BenchmarkResult result;
-
-    auto files = listImageFiles(imageFolderPath);
-    if (files.empty()) {
-        result.error = "No recognized image files found in: " + imageFolderPath;
-        return result;
-    }
-    result.totalFilesInFolder = static_cast<int>(files.size());
-    files = sampleImageFiles(std::move(files), sampleSize, sampleSeed);
 
     const int totalFiles = static_cast<int>(files.size());
     std::vector<double> timings;

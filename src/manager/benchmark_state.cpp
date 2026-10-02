@@ -10,16 +10,9 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <random>
 
 namespace {
-
-// Fixed, hidden scratch location for Benchmark's LabelStudioProject
-// source mode downloads -- cleared and recreated at the start of every
-// run, and deliberately separate from Label Assistant's own scratch
-// folder so the two windows never collide.
-std::string benchmarkScratchFolder() {
-    return (std::filesystem::temp_directory_path() / "vision_app_batch_eval_download").string();
-}
 
 cv::Mat annotateAnomalyHeatmap(const cv::Mat& frame, const AnomalyResult& result) {
     cv::Mat annotated = frame.clone();
@@ -113,51 +106,66 @@ void loadBenchmarkGroundTruth(BenchmarkState& state) {
     }
 }
 
-void syncBenchmarkLabelStudioAutoFetch(BenchmarkState& state, const LabelStudioSessionState& session) {
-    if (session.baseUrl.empty() || session.activeProjectId <= 0 || session.apiToken.empty()) {
-        return;
+BenchmarkTaskSelection selectBenchmarkTasks(const SharedLabelStudioProjectData& data, int sampleSize, unsigned seed) {
+    BenchmarkTaskSelection selection;
+    for (const auto& summary : data.summaries) {
+        if (summary.hasAnnotation && data.groundTruthByTaskId.count(summary.taskId) != 0) {
+            selection.tasks.push_back(LabelStudioUnlabeledTask{summary.taskId, summary.imagePath});
+        }
     }
-    const std::string key = session.baseUrl + "|" + std::to_string(session.activeProjectId) + "|" + session.apiToken;
-    if (key == state.lastAutoFetchKey) {
-        return;
-    }
-    state.lastAutoFetchKey = key;
+    selection.labeledTaskCount = static_cast<int>(selection.tasks.size());
 
-    // isDetection doesn't matter here -- dataImageKey extraction doesn't
-    // depend on it, and from_name/to_name (which does) are unused by this
-    // download-only flow.
-    const LabelStudioLabelingConfig config =
-        fetchLabelStudioLabelingConfig(session.baseUrl, session.activeProjectId, session.apiToken, true);
-
-    if (config.error.empty()) {
-        state.labelStudioDataImageKey = config.dataImageKey;
-        state.labelStudioAutoFetchStatus = "Auto-filled from Label Studio project settings";
-    } else {
-        state.labelStudioAutoFetchStatus = "Labeling config: " + config.error;
+    if (sampleSize > 0 && sampleSize < selection.labeledTaskCount) {
+        std::mt19937 rng(seed);
+        std::shuffle(selection.tasks.begin(), selection.tasks.end(), rng);
+        selection.tasks.resize(static_cast<size_t>(sampleSize));
     }
+    std::sort(selection.tasks.begin(), selection.tasks.end(), [](const auto& a, const auto& b) {
+        return a.taskId < b.taskId;
+    });
+
+    for (const auto& task : selection.tasks) {
+        ImageGroundTruth groundTruth = data.groundTruthByTaskId.at(task.taskId);
+        groundTruth.imageFilename = taskImageLocalFilename(task.taskId, task.imagePath);
+        selection.groundTruth.images.push_back(std::move(groundTruth));
+    }
+    return selection;
 }
 
-void startBenchmarkRun(BenchmarkState& state, const LabelStudioSessionState& session) {
+std::filesystem::path benchmarkImageCacheRoot() {
+    return std::filesystem::temp_directory_path() / "vision_app_benchmark_cache";
+}
+
+void startBenchmarkRun(
+    BenchmarkState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData) {
     BenchmarkRunConfig config;
     config.mode = state.taskMode;
     config.source = state.sourceMode;
 
     if (state.sourceMode == BenchmarkSourceMode::LabelStudioProject) {
-        const std::string scratchFolder = benchmarkScratchFolder();
         std::error_code ec;
-        std::filesystem::remove_all(scratchFolder, ec);
-        std::filesystem::create_directories(scratchFolder, ec);
+        if (!state.imageCacheCleared) {
+            // Session-only cache: drop whatever a previous app run left.
+            std::filesystem::remove_all(benchmarkImageCacheRoot(), ec);
+            state.imageCacheCleared = true;
+        }
+        const std::filesystem::path cacheFolder =
+            benchmarkImageCacheRoot() / std::to_string(session.activeProjectId);
+        std::filesystem::create_directories(cacheFolder, ec);
 
+        BenchmarkTaskSelection selection = selectBenchmarkTasks(
+            sharedData, state.sampleEnabled ? state.sampleSize : 0, std::random_device{}());
         config.labelStudioBaseUrl = session.baseUrl;
-        config.labelStudioProjectId = session.activeProjectId;
         config.labelStudioApiToken = session.apiToken;
-        config.labelStudioDataImageKey = state.labelStudioDataImageKey;
-        config.scratchFolderPath = scratchFolder;
-        state.imageFolderPath = scratchFolder;
-        // groundTruth/hasGroundTruth are left default -- the worker fills
-        // them in itself during the download phase.
+        config.cacheFolderPath = cacheFolder.string();
+        config.tasks = std::move(selection.tasks);
+        config.labeledTaskCount = selection.labeledTaskCount;
+        config.groundTruth = std::move(selection.groundTruth);
+        config.hasGroundTruth = true;
+        state.imageFolderPath = cacheFolder.string();
     } else {
         config.imageFolderPath = state.imageFolderPath;
+        config.sampleSize = state.sampleEnabled ? state.sampleSize : 0;
         config.hasGroundTruth = state.hasGroundTruth;
         if (state.hasGroundTruth) {
             config.groundTruth = state.groundTruth;
@@ -165,7 +173,6 @@ void startBenchmarkRun(BenchmarkState& state, const LabelStudioSessionState& ses
     }
 
     config.runSlotB = state.compareTwoModels;
-    config.sampleSize = state.sampleEnabled ? state.sampleSize : 0;
     config.detectionModelA = state.slots[0].detectionModel;
     config.detectionModelB = state.slots[1].detectionModel;
     config.classificationModelA = state.slots[0].classificationModel;
@@ -184,7 +191,7 @@ void startBenchmarkRun(BenchmarkState& state, const LabelStudioSessionState& ses
     state.runState = BenchmarkRunState::Running;
 }
 
-void updateBenchmarkState(BenchmarkState& state, const LabelStudioSessionState& session) {
+void updateBenchmarkState(BenchmarkState& state) {
     if (state.runState == BenchmarkRunState::Running) {
         state.lastProgress = state.worker.progress();
 
@@ -218,8 +225,6 @@ void updateBenchmarkState(BenchmarkState& state, const LabelStudioSessionState& 
             }
         }
     }
-
-    syncBenchmarkLabelStudioAutoFetch(state, session);
 
     syncBenchmarkSelectedPreview(state);
 }

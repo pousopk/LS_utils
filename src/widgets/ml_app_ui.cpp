@@ -16,7 +16,7 @@ void MlAppUi::update() {
         updateSharedLabelStudioProjectData(labelStudioProjectData, labelStudioSession);
     }
     if (showModelsWindow) {
-        updateBenchmarkState(benchmarkState, labelStudioSession);
+        updateBenchmarkState(benchmarkState);
         updateLabelAssistantState(labelAssistantState, labelStudioSession, labelStudioProjectData);
     }
     if (showLabelStudioWindow) {

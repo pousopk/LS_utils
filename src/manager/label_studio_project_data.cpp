@@ -7,6 +7,7 @@ void clearLiveTaskData(SharedLabelStudioProjectData& state) {
     state.summaryIndexByTaskId.clear();
     state.boxesByTaskId.clear();
     state.masksByTaskId.clear();
+    state.groundTruthByTaskId.clear();
 }
 
 // Appends `page` into the given containers, skipping any task id already indexed.
@@ -14,7 +15,8 @@ void appendPage(
     DatasetTaskListPage& page, std::vector<DatasetTaskSummary>& summaries,
     std::unordered_map<int, size_t>& summaryIndexByTaskId,
     std::unordered_map<int, DatasetBoxesToDraw>& boxesByTaskId,
-    std::unordered_map<int, DatasetEncodedMasks>& masksByTaskId) {
+    std::unordered_map<int, DatasetEncodedMasks>& masksByTaskId,
+    std::unordered_map<int, ImageGroundTruth>& groundTruthByTaskId) {
     for (auto& summary : page.summaries) {
         const int taskId = summary.taskId;
         if (summaryIndexByTaskId.count(taskId) != 0) {
@@ -27,6 +29,9 @@ void appendPage(
         }
         if (auto masksIt = page.masksByTaskId.find(taskId); masksIt != page.masksByTaskId.end()) {
             masksByTaskId[taskId] = std::move(masksIt->second);
+        }
+        if (auto gtIt = page.groundTruthByTaskId.find(taskId); gtIt != page.groundTruthByTaskId.end()) {
+            groundTruthByTaskId[taskId] = std::move(gtIt->second);
         }
     }
 }
@@ -100,12 +105,14 @@ void beginSharedTaskListLoad(SharedLabelStudioProjectData& state) {
 void applySharedTaskListPage(SharedLabelStudioProjectData& state, DatasetTaskListPage page) {
     state.droppedOutOfRangeTasks += page.droppedOutOfRange;
     if (state.streamingIntoLive) {
-        appendPage(page, state.summaries, state.summaryIndexByTaskId, state.boxesByTaskId, state.masksByTaskId);
+        appendPage(
+            page, state.summaries, state.summaryIndexByTaskId, state.boxesByTaskId, state.masksByTaskId,
+            state.groundTruthByTaskId);
         state.version++;
     } else {
         appendPage(
             page, state.staging.summaries, state.staging.summaryIndexByTaskId, state.staging.boxesByTaskId,
-            state.staging.masksByTaskId);
+            state.staging.masksByTaskId, state.staging.groundTruthByTaskId);
     }
 }
 
@@ -117,6 +124,7 @@ void applySharedTaskListCompletion(SharedLabelStudioProjectData& state, const Da
             state.summaryIndexByTaskId = std::move(state.staging.summaryIndexByTaskId);
             state.boxesByTaskId = std::move(state.staging.boxesByTaskId);
             state.masksByTaskId = std::move(state.staging.masksByTaskId);
+            state.groundTruthByTaskId = std::move(state.staging.groundTruthByTaskId);
             state.version++;
         }
         state.staging = SharedTaskListStaging{};

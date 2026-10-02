@@ -43,7 +43,7 @@ struct TimestampMatchCandidate {
 // sorted by abs(deltaSeconds) ascending (closest first). Tasks missing
 // `id`, missing/unparseable `created_at`, or missing `data[dataImageKey]`
 // as a string are skipped -- same tolerance for partial task records as
-// selectUnlabeledTasks/selectLabeledTasks. A task can appear under more
+// selectUnlabeledTasks. A task can appear under more
 // than one query if the windows overlap.
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
@@ -268,6 +268,11 @@ std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
 // shared task list doesn't have to keep every task's raw JSON around.
 std::vector<LabelStudioUnlabeledTask> selectUnlabeledFromSummaries(const std::vector<DatasetTaskSummary>& summaries);
 
+// Pure function: the local filename a task's image is downloaded as --
+// `<taskId><original extension>`, e.g. (123, "/data/upload/1/x.png") ->
+// "123.png". Encoding the task id lets parseTaskIdFromFilename recover it.
+std::string taskImageLocalFilename(int taskId, const std::string& imagePath);
+
 // Pure function: parses the leading numeric filename stem (before the
 // extension) of `filename` as a task id, e.g. "123.png" -> 123. Returns
 // std::nullopt if the stem is empty or contains anything but digits. Used
@@ -328,22 +333,6 @@ LabelStudioAttachSummary attachPredictionsToKnownTasks(
     const std::function<void(int completed, int total)>& onProgress = nullptr,
     const std::atomic<bool>* cancelRequested = nullptr);
 
-struct LabelStudioLabeledTask {
-    int taskId = 0;
-    std::string imagePath;   // task.data[dataImageKey], e.g. "/data/upload/11/xxx.png"
-};
-
-// Pure function: parses a Label Studio tasks-list API response (bare
-// array or an object with a "tasks" array) into the subset of tasks that
-// have at least one existing annotation -- read from total_annotations
-// when present, falling back to the length of the annotations array
-// otherwise. Predictions are ignored entirely (a task can have a
-// prediction from a prior push and still count as unlabeled here).
-// Tasks missing `id`, or missing `data[dataImageKey]` as a string, are
-// skipped.
-std::vector<LabelStudioLabeledTask> selectLabeledTasks(
-    const nlohmann::json& tasksJson, const std::string& dataImageKey);
-
 struct LabelStudioTaskSummary {
     int taskId = 0;
     std::string imagePath;    // task.data[dataImageKey]
@@ -353,11 +342,11 @@ struct LabelStudioTaskSummary {
 
 // Pure function: parses a Label Studio tasks-list API response (bare array
 // or an object with a "tasks" array) into a summary of every task --
-// unlike selectUnlabeledTasks/selectLabeledTasks, this keeps every task
+// unlike selectUnlabeledTasks, this keeps every task
 // regardless of label state, flagging each one's annotation/prediction
 // presence instead of filtering. Reads total_annotations/total_predictions
 // when present, falling back to the annotations/predictions array lengths
-// otherwise (same convention as selectUnlabeledTasks/selectLabeledTasks).
+// otherwise (same convention as selectUnlabeledTasks).
 // Tasks missing `id`, or missing `data[dataImageKey]` as a string, are
 // skipped.
 std::vector<LabelStudioTaskSummary> selectAllTaskSummaries(
@@ -531,33 +520,6 @@ bool downloadTaskImageBytes(
 bool downloadTaskImage(
     const std::string& baseUrl, const std::string& apiToken, const std::string& imagePath,
     const std::string& localOutputPath, std::string& error);
-
-struct LabelStudioGroundTruthDataset {
-    LabelStudioImportResult groundTruth;   // built by parseLabelStudioExport on the raw task list, unchanged
-    int downloaded = 0;
-    int downloadFailed = 0;
-    std::string error;   // set only on a hard failure (couldn't fetch the task list at all)
-};
-
-// Fetches the project's tasks once, and from that single response: builds
-// ground truth via parseLabelStudioExport (the exact same parser already
-// used for a manually-exported file -- a task's `data`+`annotations`
-// shape from this API matches an export's shape exactly, confirmed
-// against a real server), and downloads each labeled task's image (via
-// selectLabeledTasks) into `outputFolder`, named by its own original
-// basename (not `<taskId>.ext` -- the ground truth parseLabelStudioExport
-// built also references that same basename, so this app's existing
-// filename-based ground-truth-to-local-file matching, used everywhere
-// else in Batch mode, works unmodified). `outputFolder` is not created or
-// cleared by this function -- the caller is responsible for giving it a
-// clean, already-existing directory. `onProgress`/`cancelRequested`
-// behave exactly as fetchAndDownloadUnlabeledTasks's. Individual download
-// failures are counted in `downloadFailed`, not fatal; only a failure to
-// fetch the task list itself sets `error`.
-LabelStudioGroundTruthDataset fetchAndDownloadLabeledDataset(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
-    const std::string& outputFolder, const std::function<void(int completed, int total)>& onProgress = nullptr,
-    const std::atomic<bool>* cancelRequested = nullptr);
 
 struct LabelStudioAnnotationWriteResult {
     bool success = false;

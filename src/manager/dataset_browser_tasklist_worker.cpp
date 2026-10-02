@@ -14,6 +14,7 @@ DatasetTaskListPage buildDatasetTaskListPage(const nlohmann::json& pageTasks, co
     }
     page.boxesByTaskId = buildBoxesByTaskId(pageTasks, config.rectangleLabelsFromName);
     page.masksByTaskId = buildEncodedMasksByTaskId(pageTasks, config.brushLabelsFromName);
+    page.groundTruthByTaskId = buildGroundTruthByTaskId(pageTasks);
     return page;
 }
 

@@ -54,8 +54,10 @@ struct BenchmarkResult {
     TimingStats timing;
     int imagesFound = 0;
     int imagesWithGroundTruth = 0;
-    int totalFilesInFolder = 0;  // count before sampling was applied (== imagesFound when sampling is off)
-    std::string error;  // hard failure: folder doesn't exist / no recognized images
+    // Images available before sampling (folder files, or labeled tasks);
+    // == imagesFound when sampling is off. Set by the caller, not run*Benchmark.
+    int totalAvailableImages = 0;
+    std::string error;  // hard failure: no images to evaluate
 };
 
 // Shuffles `files` (Fisher-Yates via `seed`) and keeps only the first
@@ -68,48 +70,40 @@ struct BenchmarkResult {
 std::vector<std::filesystem::path> sampleImageFiles(
     std::vector<std::filesystem::path> files, int sampleSize, unsigned seed);
 
-// Scans `imageFolderPath` for recognized image files, optionally samples
-// down to `sampleSize` of them (0 = evaluate all -- see `sampleImageFiles`),
-// cross-references each by basename against `groundTruth` (pass nullptr
-// for none -- images are still evaluated, just with hasGroundTruth=false),
-// and calls `infer` once per image. Synchronous -- run this off the UI
-// thread if needed. `onProgress` (if non-null) is called once per
-// processed image with (completed, total) -- `total` reflects the sampled
-// count, not the full folder. `cancelRequested` (if non-null and observed
-// true) stops the loop early, returning whatever was completed so far with
-// `error` left empty (a cancelled run is not a hard failure). Callers
-// comparing two models against the same run must pass the same `sampleSeed`
-// to both calls, or they'll be evaluated on different random subsets.
+// Recognized image files directly inside `folderPath`, sorted by path.
+// Empty if the folder doesn't exist or holds no images.
+std::vector<std::filesystem::path> listImageFiles(const std::string& folderPath);
+
+// Evaluates each of `files` in order (unreadable files are skipped),
+// cross-referencing each by its filename against `groundTruth` (pass
+// nullptr for none -- images are still evaluated, just with
+// hasGroundTruth=false), and calls `infer` once per image. Synchronous --
+// run this off the UI thread. `onProgress` (if non-null) is called once
+// per processed image with (completed, files.size()). `cancelRequested`
+// (if non-null and observed true) stops the loop early, returning
+// whatever was completed so far with `error` left empty (a cancelled run
+// is not a hard failure). Choosing/sampling `files` is the caller's job;
+// two models being compared must be given the same list.
 BenchmarkResult runDetectionBenchmark(
-    const std::string& imageFolderPath,
+    const std::vector<std::filesystem::path>& files,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<Detection>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress = nullptr,
-    const std::atomic<bool>* cancelRequested = nullptr,
-    int sampleSize = 0,
-    unsigned sampleSeed = 0);
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 BenchmarkResult runClassificationBenchmark(
-    const std::string& imageFolderPath,
+    const std::vector<std::filesystem::path>& files,
     const LabelStudioImportResult* groundTruth,
     const std::function<std::vector<ClassPrediction>(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress = nullptr,
-    const std::atomic<bool>* cancelRequested = nullptr,
-    int sampleSize = 0,
-    unsigned sampleSeed = 0);
+    const std::atomic<bool>* cancelRequested = nullptr);
 
-// groundTruth is accepted for signature symmetry with the other two
-// run*Benchmark functions (and to avoid a signature change when
-// sub-project 2 adds anomaly ground truth) but is unused this
-// sub-project -- Anomaly mode has no ground truth ingestion yet.
+// Anomaly mode has no ground truth ingestion; scores only.
 BenchmarkResult runAnomalyBenchmark(
-    const std::string& imageFolderPath,
-    const LabelStudioImportResult* groundTruth,
+    const std::vector<std::filesystem::path>& files,
     const std::function<AnomalyResult(const cv::Mat&)>& infer,
     const std::function<void(int completed, int total)>& onProgress = nullptr,
-    const std::atomic<bool>* cancelRequested = nullptr,
-    int sampleSize = 0,
-    unsigned sampleSeed = 0);
+    const std::atomic<bool>* cancelRequested = nullptr);
 
 // Convenience conversions from a BenchmarkResult's per-image data
 // into the metrics functions' input shape (only images with ground truth

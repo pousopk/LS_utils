@@ -33,13 +33,14 @@ struct DatasetTaskListPage {
     std::vector<DatasetTaskSummary> summaries;
     std::unordered_map<int, DatasetBoxesToDraw> boxesByTaskId;
     std::unordered_map<int, DatasetEncodedMasks> masksByTaskId;
+    std::unordered_map<int, ImageGroundTruth> groundTruthByTaskId;
     // Tasks Label Studio sent that fall outside config.createdAtBounds --
     // non-zero only when the server didn't apply the `query` filter.
     int droppedOutOfRange = 0;
 };
 
 // Pure function: summarizeDatasetTasks + buildBoxesByTaskId +
-// buildEncodedMasksByTaskId over one page's tasks (all pure, safe on any
+// buildEncodedMasksByTaskId + buildGroundTruthByTaskId over one page's tasks (all pure, safe on any
 // thread), keeping only summaries whose createdAt passes
 // isTaskCreatedWithin(config.createdAtBounds) and counting the rest in
 // droppedOutOfRange.

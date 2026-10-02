@@ -297,6 +297,24 @@ std::unordered_map<int, DatasetBoxesToDraw> buildBoxesByTaskId(
     return result;
 }
 
+std::unordered_map<int, ImageGroundTruth> buildGroundTruthByTaskId(const nlohmann::json& tasksJson) {
+    std::unordered_map<int, ImageGroundTruth> result;
+    const nlohmann::json* tasks = resolveTaskArray(tasksJson);
+    if (tasks == nullptr) {
+        return result;
+    }
+    for (const auto& task : *tasks) {
+        if (!task.contains("id") || !task["id"].is_number_integer()) {
+            continue;
+        }
+        LabelStudioImportResult parsed = parseLabelStudioExport(nlohmann::json::array({task}));
+        if (parsed.images.size() == 1) {
+            result[task["id"].get<int>()] = std::move(parsed.images.front());
+        }
+    }
+    return result;
+}
+
 std::unordered_map<int, DatasetMasksToDraw> buildMasksByTaskId(
     const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName) {
     std::unordered_map<int, DatasetMasksToDraw> result;

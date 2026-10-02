@@ -10,6 +10,7 @@
 #include "manager/model_task.hpp"
 #include "manager/detection_metrics.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/model_slot.hpp"
 #include "manager/yolo_inference.hpp"
@@ -17,6 +18,7 @@
 #include <GLFW/glfw3.h>
 
 #include <array>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,11 +53,10 @@ struct BenchmarkState {
 
     // LocalFolder mode: imageFolderPath is user-picked, groundTruth comes
     // from a manually-exported Label Studio JSON file (groundTruthJsonPath).
-    // LabelStudioProject mode: startBenchmarkRun points
-    // imageFolderPath at a hidden scratch folder instead, and the worker
-    // fills in groundTruth/hasGroundTruth itself from the download phase
-    // -- from that point on, results/metrics/preview treat it exactly
-    // like the LocalFolder case.
+    // LabelStudioProject mode: tasks and ground truth come from the shared
+    // task list, and startBenchmarkRun points imageFolderPath at the
+    // project's session image cache -- from that point on,
+    // results/metrics/preview treat it exactly like the LocalFolder case.
     BenchmarkSourceMode sourceMode = BenchmarkSourceMode::LocalFolder;
     std::string imageFolderPath;
     std::string groundTruthJsonPath;
@@ -63,14 +64,9 @@ struct BenchmarkState {
     std::string groundTruthStatus;
     bool hasGroundTruth = false;
 
-    // LabelStudioProject mode connection details. labelStudioDataImageKey
-    // is auto-fetched (see syncBenchmarkLabelStudioAutoFetch) -- the key
-    // under a task's `data` holding its image path, needed to know what
-    // to download; unlike Label Assistant's push, no from_name/to_name
-    // are needed here since this only ever downloads, never pushes.
-    std::string labelStudioDataImageKey;
-    std::string labelStudioAutoFetchStatus;
-    std::string lastAutoFetchKey;
+    // The LabelStudioProject image cache is wiped once per app session,
+    // on the first Label Studio run (see benchmarkImageCacheRoot).
+    bool imageCacheCleared = false;
 
     BenchmarkWorker worker;
     BenchmarkRunState runState = BenchmarkRunState::NotStarted;
@@ -109,33 +105,41 @@ struct BenchmarkState {
 // LocalFolder mode only.
 void loadBenchmarkGroundTruth(BenchmarkState& state);
 
-// Runs auto-detect on session's (baseUrl, activeProjectId, apiToken) via
-// the shared fetchLabelStudioLabelingConfig, storing only dataImageKey
-// (the from_name/to_name it also returns are unused here). Re-fetches
-// only when that connection combination actually changes (see
-// state.lastAutoFetchKey). LabelStudioProject mode only.
-void syncBenchmarkLabelStudioAutoFetch(BenchmarkState& state, const LabelStudioSessionState& session);
+struct BenchmarkTaskSelection {
+    std::vector<LabelStudioUnlabeledTask> tasks;  // sorted by task id
+    // Ground truth for `tasks`, each image's filename set to
+    // taskImageLocalFilename -- the name it's cached under.
+    LabelStudioImportResult groundTruth;
+    int labeledTaskCount = 0;  // labeled tasks before sampling
+};
 
-// Builds a BenchmarkRunConfig from state's slots + source config (LocalFolder:
-// imageFolderPath + any loaded groundTruth as-is; LabelStudioProject:
-// clears/recreates a hidden scratch folder, points state.imageFolderPath
-// at it, and lets the worker fill in groundTruth itself during its
-// download phase), clears any previous results, and calls
-// state.worker.start(...). Caller must have already verified the
-// required slot(s) are loaded (and, in LabelStudioProject mode, that
-// session is connected with an active project). Sets state.runState =
-// Running.
-void startBenchmarkRun(BenchmarkState& state, const LabelStudioSessionState& session);
+// Pure function: the labeled tasks in `data` (an annotation plus parsed
+// ground truth), randomly sampled down to `sampleSize` with `seed`
+// (0 = keep all). Sampling happens here, before anything is downloaded.
+BenchmarkTaskSelection selectBenchmarkTasks(const SharedLabelStudioProjectData& data, int sampleSize, unsigned seed);
+
+// Where LabelStudioProject runs cache downloaded images:
+// <temp>/vision_app_benchmark_cache, one subfolder per project id.
+std::filesystem::path benchmarkImageCacheRoot();
+
+// Builds a BenchmarkRunConfig from state's slots + source config
+// (LocalFolder: imageFolderPath + any loaded groundTruth as-is;
+// LabelStudioProject: selectBenchmarkTasks over sharedData, with
+// state.imageFolderPath pointed at the project's image cache -- wiping
+// the cache root first if this is the session's first Label Studio run),
+// clears any previous results, and calls state.worker.start(...). Caller
+// must have already verified the required slot(s) are loaded (and, in
+// LabelStudioProject mode, that sharedData has finished loading). Sets
+// state.runState = Running.
+void startBenchmarkRun(
+    BenchmarkState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData);
 
 // Called once per main-loop iteration while the window is open: while a
 // run is in progress, polls worker.progress()/tryTakeResult() and, on
 // completion, computes detection/classification metrics for both slots.
 // Always also lazily loads/annotates/uploads the currently selected
-// image's preview textures (a no-op if the selection hasn't changed), and
-// lazily runs syncBenchmarkLabelStudioAutoFetch (a no-op unless
-// LabelStudioProject mode's session is connected with an active project
-// and it changed).
-void updateBenchmarkState(BenchmarkState& state, const LabelStudioSessionState& session);
+// image's preview textures (a no-op if the selection hasn't changed).
+void updateBenchmarkState(BenchmarkState& state);
 
 // Resets results (resultA/B, metrics, run state, selection, confusion-cell
 // filter) and drops filter values that no longer apply, without touching

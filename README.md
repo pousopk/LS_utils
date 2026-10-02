@@ -11,6 +11,7 @@ The main window has two tabs. The **Label Studio** tab has Connection, Labeling 
 - ONNX Runtime backend (GPU-optional) with automatic input-shape/preprocessing/class-name detection from model metadata.
 - Detection, classification and anomaly modes.
 - Batch mode against a folder of images or a Label Studio project, with ground-truth import, precision/recall/AP metrics, confusion matrices, drill-down filters, and a random-sample mode for large datasets on slow hardware.
+- Label Studio mode uses the Label Studio tab's loaded task list (and its import-date range); only the sampled images are downloaded, and downloads are cached for the rest of the session.
 
 ### Label Assistant (Models tab, auto-labeling)
 - Run an already-trained ONNX classifier or detector directly over a folder of unlabeled images to draft predictions.

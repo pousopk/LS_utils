@@ -166,6 +166,15 @@ DatasetMasksToDraw masksToDrawForTask(
 std::unordered_map<int, DatasetBoxesToDraw> buildBoxesByTaskId(
     const nlohmann::json& allTasksRaw, const std::string& rectangleLabelsFromName);
 
+// Pure function: one pass over `tasksJson` (bare array or {"tasks": [...]}),
+// building a taskId -> ImageGroundTruth map from each task's first
+// annotation via parseLabelStudioExport -- the same parser used for a
+// manually-exported ground-truth file, so Benchmark's Label Studio source
+// sees exactly the ground truth a file export would give it. Tasks without
+// an integer `id`, or that parseLabelStudioExport skips (no annotation, no
+// image field), get no entry.
+std::unordered_map<int, ImageGroundTruth> buildGroundTruthByTaskId(const nlohmann::json& tasksJson);
+
 // Same one-pass-instead-of-per-lookup idea as buildBoxesByTaskId, for masksToDrawForTask.
 std::unordered_map<int, DatasetMasksToDraw> buildMasksByTaskId(
     const nlohmann::json& allTasksRaw, const std::string& brushLabelsFromName);

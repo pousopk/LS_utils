@@ -194,6 +194,32 @@ void test_buildDatasetTaskListPage_summarizesAndKeepsOnlyCompactData() {
     CHECK(page.masksByTaskId.empty());
 }
 
+void test_buildDatasetTaskListPage_keepsGroundTruthPerTask() {
+    const nlohmann::json pageTasks = nlohmann::json::array({
+        {{"id", 20}, {"data", {{"image", "/data/upload/1/cat.jpg"}}}, {"total_annotations", 1},
+         {"annotations", nlohmann::json::array({{{"result", nlohmann::json::array({
+             {{"type", "choices"}, {"value", {{"choices", nlohmann::json::array({"cat"})}}}},
+         })}}})}},
+        {{"id", 21}, {"data", {{"image", "/data/upload/1/dog.jpg"}}}, {"total_annotations", 0},
+         {"annotations", nlohmann::json::array()}},
+    });
+    DatasetTaskListConfig config;
+    config.dataImageKey = "image";
+    const DatasetTaskListPage page = buildDatasetTaskListPage(pageTasks, config);
+    CHECK(page.groundTruthByTaskId.size() == 1);
+    const auto it = page.groundTruthByTaskId.find(20);
+    CHECK(it != page.groundTruthByTaskId.end());
+    if (it != page.groundTruthByTaskId.end()) {
+        CHECK(it->second.hasClassificationAnnotation);
+        CHECK(it->second.classificationLabel == "cat");
+    }
+
+    SharedLabelStudioProjectData state;
+    beginSharedTaskListLoad(state);
+    applySharedTaskListPage(state, page);
+    CHECK(state.groundTruthByTaskId.count(20) == 1);
+}
+
 void test_describeSharedTaskListLoadProgress() {
     SharedLabelStudioProjectData state;
     state.loading = true;
@@ -299,6 +325,7 @@ int main() {
     test_firstLoadCancelledReportsCancelled();
     test_beginAfterFailedFirstLoadClearsPartialData();
     test_buildDatasetTaskListPage_summarizesAndKeepsOnlyCompactData();
+    test_buildDatasetTaskListPage_keepsGroundTruthPerTask();
     test_describeSharedTaskListLoadProgress();
     test_buildDatasetTaskListPage_dropsTasksOutsideCreatedAtBounds();
     test_toCreatedAtBounds_fromMidnightToEndOfToDay();

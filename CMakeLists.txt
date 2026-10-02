@@ -87,7 +87,7 @@ enable_testing()
 # commit b470a2d (it includes a header that no longer exists). Restoring or
 # removing it is a separate task.
 set(ML_TESTS
-    benchmark_filters_tests calendar_date_tests dataset_browser_tests detection_metrics_tests
+    benchmark_filters_tests benchmark_task_selection_tests calendar_date_tests dataset_browser_tests detection_metrics_tests
     image_fit_tests item_filters_tests label_assistant_control_tag_tests label_assistant_filter_tests
     label_studio_client_tests label_studio_profiles_tests label_studio_profiles_state_tests
     label_studio_project_data_tests label_studio_session_tests labeling_state_tests model_task_detection_tests
