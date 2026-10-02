@@ -1,12 +1,15 @@
 #pragma once
 
+#include "manager/item_filters.hpp"
 #include "manager/label_studio_import.hpp"
 
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <iosfwd>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -26,6 +29,7 @@ struct DatasetTaskSummary {
     std::optional<float> minConfidence;     // lowest predictions[i].score present; unset if no prediction has a numeric score
     std::optional<float> maxConfidence;     // highest predictions[i].score present; unset if no prediction has a numeric score
     std::string createdAt;                  // task.created_at verbatim (ISO-8601 UTC); empty if missing or not a string
+    std::optional<std::time_t> createdAtEpoch;   // createdAt parsed (parseIso8601Utc); unset if empty or unparseable
 };
 
 // Pure function: parses a Label Studio tasks-list API response (bare
@@ -45,28 +49,36 @@ struct DatasetTaskSummary {
 std::vector<DatasetTaskSummary> summarizeDatasetTasks(
     const nlohmann::json& tasksJson, const std::string& dataImageKey);
 
-enum class DatasetPresenceFilter { Any, Has, Lacks };
-
-enum class DatasetConfidenceFilterMode { None, LessThan, GreaterThan };
-
 struct DatasetFilterSpec {
-    DatasetPresenceFilter annotationFilter = DatasetPresenceFilter::Any;
-    DatasetPresenceFilter predictionFilter = DatasetPresenceFilter::Any;
-    std::string classNameFilter;   // empty = no class-name filtering; otherwise an exact match against any of classNames
-    DatasetConfidenceFilterMode confidenceFilterMode = DatasetConfidenceFilterMode::None;
-    float confidenceThreshold = 0.5f;   // compared against maxConfidence (GreaterThan) or minConfidence (LessThan)
+    PresenceFilter annotation;
+    PresenceFilter prediction;
+    ClassFilter cls;
+    // LessThan tests a task's lowest prediction score, GreaterThan its
+    // highest (see filterDatasetTasks).
+    ConfidenceFilter confidence;
+    TimeWindowFilter time;   // on createdAtEpoch
 };
 
-// Pure function: returns the taskId of every summary matching every
-// active filter dimension in `filter` (dimensions left at their default
-// -- Any / empty / None -- are ignored). LessThan/GreaterThan each need
-// at least one prediction with a numeric score to evaluate: LessThan
-// passes if the summary's *lowest* confidence is below the threshold
-// (i.e. at least one prediction is that low); GreaterThan passes if its
-// *highest* confidence is above it. A summary with no scored prediction
-// at all never passes an active confidence filter, regardless of
-// threshold.
+// Pure function: returns the taskId of every summary passing every
+// filter in `filter` (AND). Confidence: LessThan passes if the task's
+// *lowest* prediction score is below the threshold (at least one
+// prediction is that low); GreaterThan if its *highest* is above; a task
+// with no scored prediction never passes an active confidence filter.
+// Time: tested on createdAtEpoch; a task without one never passes an
+// active window; an inactive window (Off, or input that doesn't resolve)
+// passes everything. Result order: AroundTime sorts closest to the
+// center first (ties by task id); otherwise `summaries` order.
 std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summaries, const DatasetFilterSpec& filter);
+
+// Pure function: every class name across `summaries`, sorted and
+// de-duplicated -- the Dataset Browser's class filter options.
+std::vector<std::string> collectDatasetClassNames(const std::vector<DatasetTaskSummary>& summaries);
+
+// How many tasks were created on each local calendar day (from
+// createdAtEpoch; tasks without one are skipped) -- the days the Dataset
+// Browser's time-filter calendars mark. Not pure: the local day depends
+// on the process's timezone setting.
+std::map<CalendarDate, int> countTasksPerLocalDay(const std::vector<DatasetTaskSummary>& summaries);
 
 // Pure function: returns the subset of `allTasksRaw` (the same raw
 // tasks-list JSON fetchAllLabelStudioTasksRaw produces) whose task ids

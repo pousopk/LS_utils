@@ -3,33 +3,13 @@
 #include "manager/batch_evaluation.hpp"
 #include "manager/comparison_task_mode.hpp"
 #include "manager/detection_metrics.hpp"
+#include "manager/item_filters.hpp"
 #include "manager/label_studio_import.hpp"
 #include "manager/yolo_inference.hpp"
 
 #include <optional>
 #include <string>
 #include <vector>
-
-enum class BatchEvalImageSortMode {
-    Filename,
-    ConfidenceAscending,
-    ConfidenceDescending,
-};
-
-enum class BatchEvalConfidenceFilterMode {
-    None,
-    LessThan,
-    GreaterThan,
-};
-
-// Detection mode only -- whether an image produced at least one detected
-// box. Meaningless for classification (a run always produces a top-1
-// prediction unless inference itself failed), so it's ignored there.
-enum class BatchEvalDetectionPresenceFilter {
-    Any,
-    HasDetections,
-    NoDetections,
-};
 
 // Pure per-image filter/sort logic for the Model Evaluation window's batch
 // image list. Deliberately free of GL/worker/Label Studio dependencies so
@@ -96,11 +76,15 @@ struct BatchEvalConfusionCellFilter {
 // value passes every image.
 struct BatchEvalImageFilters {
     BatchEvalErrorFilter errorFilter = BatchEvalErrorFilter::Any;
-    std::string classFilter;  // empty = all classes
+    // Also scopes the error filter: with a class set, the error must
+    // involve that class.
+    ClassFilter cls;
     BatchEvalConfidenceBasis confidenceBasis = BatchEvalConfidenceBasis::Mean;
-    BatchEvalConfidenceFilterMode confidenceFilterMode = BatchEvalConfidenceFilterMode::None;
-    float confidenceFilterThreshold = 0.5f;
-    BatchEvalDetectionPresenceFilter detectionPresenceFilter = BatchEvalDetectionPresenceFilter::Any;
+    ConfidenceFilter confidence;
+    // Detection mode only -- Has = at least one detected box. Meaningless
+    // for classification (a run always produces a top-1 prediction unless
+    // inference itself failed), so it's ignored there.
+    PresenceFilter detections;
     bool modelsDisagreeOnly = false;  // compare mode only
     std::optional<BatchEvalConfusionCellFilter> confusionCell;
 };

@@ -73,10 +73,13 @@ void updateDatasetBrowserState(
     if (sharedData.lastFetchKey != state.lastSeenSharedFetchKey) {
         state.lastSeenSharedFetchKey = sharedData.lastFetchKey;
         state.thumbnailCache.clear();
+        state.filter.cls.className.clear();
         state.thumbnailWorker.setConnection(session.baseUrl, session.apiToken);
     }
     if (sharedData.version != state.lastAppliedSharedVersion) {
         state.lastAppliedSharedVersion = sharedData.version;
+        state.availableClassNames = collectDatasetClassNames(sharedData.summaries);
+        state.tasksPerDay = countTasksPerLocalDay(sharedData.summaries);
         reapplyDatasetBrowserFilter(state, sharedData);
     }
 

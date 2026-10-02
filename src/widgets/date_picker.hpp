@@ -2,6 +2,7 @@
 
 #include "manager/calendar_date.hpp"
 
+#include <map>
 #include <optional>
 
 // A button showing `value` as "YYYY/MM/DD" (or `emptyText` when unset)
@@ -12,5 +13,9 @@
 // (popup, table, selectable), with the date math in calendar_date.hpp.
 // `label` is drawn to the right, ImGui-style, and also scopes the popup's
 // ID, so it must be unique within the current ID stack. Returns true on
-// the frame `value` changes.
-bool DatePickerButton(const char* label, std::optional<CalendarDate>& value, const char* emptyText = "Any");
+// the frame `value` changes. When `markedDays` is given, each day in it
+// gets a tinted cell and a "<count> picture(s)" tooltip, so days that
+// have data stand out.
+bool DatePickerButton(
+    const char* label, std::optional<CalendarDate>& value, const char* emptyText = "Any",
+    const std::map<CalendarDate, int>* markedDays = nullptr);

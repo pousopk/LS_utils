@@ -59,9 +59,12 @@ std::time_t localMidnight(const CalendarDate& date) {
     return std::mktime(&tm);
 }
 
-CalendarDate todayLocal() {
-    const std::time_t now = std::time(nullptr);
+CalendarDate localCalendarDate(std::time_t t) {
     std::tm local{};
-    localtime_r(&now, &local);
+    localtime_r(&t, &local);
     return CalendarDate{local.tm_year + 1900, local.tm_mon + 1, local.tm_mday};
+}
+
+CalendarDate todayLocal() {
+    return localCalendarDate(std::time(nullptr));
 }

@@ -155,29 +155,22 @@ bool slotHasClass(ComparisonTaskMode mode, const BatchImageResult& image, const 
 bool passesConfidenceFilter(
     ComparisonTaskMode mode, const BatchImageResult* imageA, const BatchImageResult* imageB,
     const BatchEvalImageFilters& filters) {
-    if (filters.confidenceFilterMode == BatchEvalConfidenceFilterMode::None) {
+    if (filters.confidence.mode == ThresholdMode::None) {
         return true;
     }
     return eitherSlot(imageA, imageB, [&](const BatchImageResult& image) {
-        const std::optional<float> confidence = batchEvalImageConfidence(mode, &image, filters.confidenceBasis);
-        if (!confidence) {
-            return false;
-        }
-        return filters.confidenceFilterMode == BatchEvalConfidenceFilterMode::LessThan
-            ? *confidence < filters.confidenceFilterThreshold
-            : *confidence > filters.confidenceFilterThreshold;
+        return filters.confidence.passes(batchEvalImageConfidence(mode, &image, filters.confidenceBasis));
     });
 }
 
 bool passesDetectionPresenceFilter(
     ComparisonTaskMode mode, const BatchImageResult* imageA, const BatchImageResult* imageB,
-    BatchEvalDetectionPresenceFilter presence) {
-    if (mode != ComparisonTaskMode::Detection || presence == BatchEvalDetectionPresenceFilter::Any) {
+    const PresenceFilter& presence) {
+    if (mode != ComparisonTaskMode::Detection || presence.presence == Presence::Any) {
         return true;
     }
     return eitherSlot(imageA, imageB, [&](const BatchImageResult& image) {
-        const bool hasDetections = !image.detections.empty();
-        return presence == BatchEvalDetectionPresenceFilter::HasDetections ? hasDetections : !hasDetections;
+        return presence.passes(!image.detections.empty());
     });
 }
 
@@ -227,14 +220,14 @@ bool batchEvalImagePassesFilters(
         if (errorFilterActive) {
             // With a class selected, the error must involve that class.
             const bool hasError = eitherSlot(imageA, imageB, [&](const BatchImageResult& image) {
-                return slotHasError(mode, image, filters.errorFilter, filters.classFilter);
+                return slotHasError(mode, image, filters.errorFilter, filters.cls.className);
             });
             if (!hasError) {
                 return false;
             }
-        } else if (!filters.classFilter.empty()) {
+        } else if (!filters.cls.className.empty()) {
             const bool hasClass = eitherSlot(imageA, imageB, [&](const BatchImageResult& image) {
-                return slotHasClass(mode, image, filters.classFilter);
+                return slotHasClass(mode, image, filters.cls.className);
             });
             if (!hasClass) {
                 return false;
@@ -244,7 +237,7 @@ bool batchEvalImagePassesFilters(
     if (!passesConfidenceFilter(mode, imageA, imageB, filters)) {
         return false;
     }
-    if (!passesDetectionPresenceFilter(mode, imageA, imageB, filters.detectionPresenceFilter)) {
+    if (!passesDetectionPresenceFilter(mode, imageA, imageB, filters.detections)) {
         return false;
     }
     if (filters.modelsDisagreeOnly && mode != ComparisonTaskMode::Anomaly) {

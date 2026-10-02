@@ -2,6 +2,7 @@
 
 #include "ui_common/file_browser_utils.hpp"
 #include "ui_common/image_fit.hpp"
+#include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
 #include "ui_common/tooltip_helpers.hpp"
@@ -551,34 +552,19 @@ void drawImageList(ModelEvaluationState& state) {
 
         const std::vector<std::string> classNames =
             collectBatchEvalClassNames(mode, state.batch.resultA, state.batch.resultB);
-        if (!filters.classFilter.empty()
-            && std::find(classNames.begin(), classNames.end(), filters.classFilter) == classNames.end()) {
-            filters.classFilter.clear();
+        if (!filters.cls.className.empty()
+            && std::find(classNames.begin(), classNames.end(), filters.cls.className) == classNames.end()) {
+            filters.cls.className.clear();
         }
-        if (ImGui::BeginCombo("Class", filters.classFilter.empty() ? "All classes" : filters.classFilter.c_str())) {
-            if (ImGui::Selectable("All classes", filters.classFilter.empty())) {
-                filters.classFilter.clear();
-            }
-            for (const auto& className : classNames) {
-                if (ImGui::Selectable(className.c_str(), filters.classFilter == className)) {
-                    filters.classFilter = className;
-                }
-            }
-            ImGui::EndCombo();
-        }
+        drawClassFilter("Class", filters.cls, classNames);
 
         if (state.compareTwoModels) {
             ImGui::Checkbox("Models disagree", &filters.modelsDisagreeOnly);
         }
     }
 
-    ImGui::InputTextWithHint("##BatchEvalImageFilter", "Search filename...", &state.batch.imageListFilter);
-
-    static const char* kSortLabels[] = {"Filename", "Confidence (low first)", "Confidence (high first)"};
-    int sortIndex = static_cast<int>(state.batch.imageSortMode);
-    if (ImGui::Combo("Sort", &sortIndex, kSortLabels, IM_ARRAYSIZE(kSortLabels))) {
-        state.batch.imageSortMode = static_cast<BatchEvalImageSortMode>(sortIndex);
-    }
+    drawTextSearch("##BatchEvalImageFilter", "Search filename...", state.batch.imageSearch);
+    drawConfidenceSort("Sort", state.batch.imageSort);
 
     if (mode == ComparisonTaskMode::Detection) {
         static const char* kBasisLabels[] = {"Mean", "Lowest box", "Highest box"};
@@ -588,32 +574,17 @@ void drawImageList(ModelEvaluationState& state) {
         }
     }
 
-    static const char* kConfidenceFilterLabels[] = {"None", "< threshold", "> threshold"};
-    int confidenceFilterIndex = static_cast<int>(filters.confidenceFilterMode);
-    if (ImGui::Combo(
-            "Confidence filter", &confidenceFilterIndex, kConfidenceFilterLabels,
-            IM_ARRAYSIZE(kConfidenceFilterLabels))) {
-        filters.confidenceFilterMode = static_cast<BatchEvalConfidenceFilterMode>(confidenceFilterIndex);
-    }
-    ImGui::BeginDisabled(filters.confidenceFilterMode == BatchEvalConfidenceFilterMode::None);
-    ImGui::SliderFloat("Threshold", &filters.confidenceFilterThreshold, 0.0f, 1.0f, "%.2f");
-    ImGui::EndDisabled();
+    drawConfidenceFilter("Confidence filter", filters.confidence);
 
     if (mode == ComparisonTaskMode::Detection) {
-        static const char* kDetectionPresenceLabels[] = {"Any", "Has detections", "No detections"};
-        int detectionPresenceIndex = static_cast<int>(filters.detectionPresenceFilter);
-        if (ImGui::Combo(
-                "Detections", &detectionPresenceIndex, kDetectionPresenceLabels,
-                IM_ARRAYSIZE(kDetectionPresenceLabels))) {
-            filters.detectionPresenceFilter = static_cast<BatchEvalDetectionPresenceFilter>(detectionPresenceIndex);
-        }
+        drawPresenceFilter("Detections", filters.detections, "Any", "Has detections", "No detections");
     }
 
     // (filename, sort key) -- the key is computed once per image rather
     // than inside the sort comparator.
     std::vector<std::pair<std::string, float>> entries;
     for (const auto& image : state.batch.resultA.images) {
-        if (!fileNameMatchesFilter(std::filesystem::path(image.imageFilename), state.batch.imageListFilter)) {
+        if (!state.batch.imageSearch.passes(image.imageFilename)) {
             continue;
         }
         const BatchImageResult* imageB = findBatchImage(state.batch.resultB, image.imageFilename);
@@ -624,11 +595,7 @@ void drawImageList(ModelEvaluationState& state) {
             image.imageFilename, batchEvalImageSortConfidence(mode, &image, imageB, filters.confidenceBasis));
     }
 
-    if (state.batch.imageSortMode == BatchEvalImageSortMode::ConfidenceAscending) {
-        std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
-    } else if (state.batch.imageSortMode == BatchEvalImageSortMode::ConfidenceDescending) {
-        std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    }
+    sortByConfidence(entries, state.batch.imageSort, [](const auto& entry) { return std::optional<float>(entry.second); });
 
     if (filters.confusionCell) {
         const char* slotName =
@@ -899,16 +866,14 @@ void drawFilePickerPopup(ModelEvaluationState& state) {
 
 } // namespace
 
-void drawModelEvaluationWindow(
-    bool* show, ModelEvaluationState& state, const LabelStudioSessionState& session,
+void drawModelEvaluationTab(
+    bool* show, ImGuiTabItemFlags flags, ModelEvaluationState& state, const LabelStudioSessionState& session,
     const std::function<void()>& onOpenLabelStudioWindow) {
     if (!*show) {
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(1200.0f, 1000.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Model Evaluation", show)) {
-        ImGui::End();
+    if (!ImGui::BeginTabItem("Model Evaluation", show, flags)) {
         return;
     }
 
@@ -929,8 +894,8 @@ void drawModelEvaluationWindow(
 
     drawBatchBody(state, session, onOpenLabelStudioWindow);
 
-    ImGui::End();
-
     drawFolderPickerPopup(state);
     drawFilePickerPopup(state);
+
+    ImGui::EndTabItem();
 }

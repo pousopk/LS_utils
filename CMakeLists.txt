@@ -88,8 +88,8 @@ enable_testing()
 # removing it is a separate task.
 set(ML_TESTS
     batch_eval_filters_tests calendar_date_tests dataset_browser_tests detection_metrics_tests
-    image_fit_tests label_assistant_control_tag_tests label_studio_client_tests
-    label_studio_project_data_tests label_studio_session_tests labeling_state_tests
+    image_fit_tests item_filters_tests label_assistant_control_tag_tests label_assistant_filter_tests
+    label_studio_client_tests label_studio_project_data_tests label_studio_session_tests labeling_state_tests
     obb_detection_tests pugixml_smoke_tests)
 foreach(test ${ML_TESTS})
     add_executable(${test} tests/${test}.cpp)

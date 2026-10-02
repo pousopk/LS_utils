@@ -1,8 +1,11 @@
 #include "manager/label_studio_dataset_browser.hpp"
 
+#include "manager/time_parse.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <ostream>
 
 namespace {
@@ -127,6 +130,7 @@ std::vector<DatasetTaskSummary> summarizeDatasetTasks(
         summary.imagePath = task["data"][dataImageKey].get<std::string>();
         if (task.contains("created_at") && task["created_at"].is_string()) {
             summary.createdAt = task["created_at"].get<std::string>();
+            summary.createdAtEpoch = parseIso8601Utc(summary.createdAt);
         }
 
         if (task.contains("total_annotations") && task["total_annotations"].is_number_integer()) {
@@ -167,45 +171,56 @@ std::vector<DatasetTaskSummary> summarizeDatasetTasks(
 }
 
 std::vector<int> filterDatasetTasks(const std::vector<DatasetTaskSummary>& summaries, const DatasetFilterSpec& filter) {
-    std::vector<int> matching;
+    const std::optional<TimeWindow> window = filter.time.resolve();
 
+    // (taskId, |createdAt - center|) -- the distance is only used for
+    // AroundTime ordering.
+    std::vector<std::pair<int, long long>> matching;
     for (const auto& summary : summaries) {
-        if (filter.annotationFilter == DatasetPresenceFilter::Has && !summary.hasAnnotation) {
+        if (!filter.annotation.passes(summary.hasAnnotation) || !filter.prediction.passes(summary.hasPrediction)) {
             continue;
         }
-        if (filter.annotationFilter == DatasetPresenceFilter::Lacks && summary.hasAnnotation) {
+        if (!filter.cls.passes(summary.classNames)) {
             continue;
         }
-        if (filter.predictionFilter == DatasetPresenceFilter::Has && !summary.hasPrediction) {
+        const std::optional<float> confidence =
+            filter.confidence.mode == ThresholdMode::LessThan ? summary.minConfidence : summary.maxConfidence;
+        if (!filter.confidence.passes(confidence)) {
             continue;
         }
-        if (filter.predictionFilter == DatasetPresenceFilter::Lacks && summary.hasPrediction) {
+        if (!passesTimeWindow(window, summary.createdAtEpoch)) {
             continue;
         }
-
-        if (!filter.classNameFilter.empty()) {
-            const bool hasClass =
-                std::find(summary.classNames.begin(), summary.classNames.end(), filter.classNameFilter)
-                != summary.classNames.end();
-            if (!hasClass) {
-                continue;
-            }
+        long long distance = 0;
+        if (window && window->center) {
+            distance = std::llabs(
+                static_cast<long long>(*summary.createdAtEpoch) - static_cast<long long>(*window->center));
         }
-
-        if (filter.confidenceFilterMode == DatasetConfidenceFilterMode::LessThan) {
-            if (!summary.minConfidence || !(*summary.minConfidence < filter.confidenceThreshold)) {
-                continue;
-            }
-        } else if (filter.confidenceFilterMode == DatasetConfidenceFilterMode::GreaterThan) {
-            if (!summary.maxConfidence || !(*summary.maxConfidence > filter.confidenceThreshold)) {
-                continue;
-            }
-        }
-
-        matching.push_back(summary.taskId);
+        matching.emplace_back(summary.taskId, distance);
     }
 
-    return matching;
+    if (window && window->center) {
+        std::sort(matching.begin(), matching.end(), [](const auto& a, const auto& b) {
+            return a.second != b.second ? a.second < b.second : a.first < b.first;
+        });
+    }
+
+    std::vector<int> ids;
+    ids.reserve(matching.size());
+    for (const auto& [taskId, distance] : matching) {
+        ids.push_back(taskId);
+    }
+    return ids;
+}
+
+std::vector<std::string> collectDatasetClassNames(const std::vector<DatasetTaskSummary>& summaries) {
+    std::vector<std::string> names;
+    for (const auto& summary : summaries) {
+        names.insert(names.end(), summary.classNames.begin(), summary.classNames.end());
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
 }
 
 nlohmann::json buildDatasetExportJson(const nlohmann::json& allTasksRaw, const std::vector<int>& matchingTaskIds) {
@@ -438,4 +453,14 @@ std::unordered_map<int, size_t> indexSummariesByTaskId(const std::vector<Dataset
         result[summaries[i].taskId] = i;
     }
     return result;
+}
+
+std::map<CalendarDate, int> countTasksPerLocalDay(const std::vector<DatasetTaskSummary>& summaries) {
+    std::map<CalendarDate, int> counts;
+    for (const auto& summary : summaries) {
+        if (summary.createdAtEpoch) {
+            ++counts[localCalendarDate(*summary.createdAtEpoch)];
+        }
+    }
+    return counts;
 }

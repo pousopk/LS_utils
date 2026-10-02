@@ -96,6 +96,19 @@ void test_parseTypedLocalTimestamp_malformedReturnsNullopt() {
     CHECK(!parseTypedLocalTimestamp("").has_value());
 }
 
+void test_parseTypedLocalTimestamp_rejectsTruncatedOrTrailingInput() {
+    // std::get_time treats running out of input as success, so a
+    // half-typed entry must be rejected explicitly.
+    ScopedTz tz("UTC");
+    CHECK(!parseTypedLocalTimestamp("2026").has_value());
+    CHECK(!parseTypedLocalTimestamp("2026/09/1").has_value());
+    CHECK(!parseTypedLocalTimestamp("2026/09/10 12").has_value());
+    CHECK(!parseTypedLocalTimestamp("2026/09/10 12:00").has_value());
+    CHECK(!parseTypedLocalTimestamp("2026/09/10 12:00:00x").has_value());
+    CHECK(parseTypedLocalTimestamp("2026/09/10 12:00:00") == 1789041600);
+    CHECK(parseTypedLocalTimestamp(" 2026/09/10 12:00:00 ") == 1789041600);
+}
+
 void test_matchTasksToTimestamps_withinToleranceAndSorted() {
     const auto tasks = nlohmann::json::parse(R"([
         {"id": 1, "created_at": "2026-09-10T12:00:00Z", "data": {"image": "/a/1.jpg"}},
@@ -722,33 +735,6 @@ void test_parseBrushResultRegions_filtersByFromNameAndType() {
     CHECK(parseBrushResultRegions(result, "brush").empty());
 }
 
-void test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId() {
-    TimestampMatchCandidate a;
-    a.taskId = 1;
-    a.imagePath = "/a.jpg";
-    a.deltaSeconds = 5;
-    TimestampMatchCandidate b;
-    b.taskId = 2;
-    b.imagePath = "/b.jpg";
-    b.deltaSeconds = -3;
-    TimestampMatchCandidate aAgain;
-    aAgain.taskId = 1;
-    aAgain.imagePath = "/a.jpg";
-    aAgain.deltaSeconds = 999;
-
-    const std::vector<std::vector<TimestampMatchCandidate>> perQuery = {{a, b}, {aAgain}};
-    const auto deduped = dedupTimestampMatchCandidates(perQuery);
-
-    CHECK(deduped.size() == 2);
-    CHECK(deduped[0].taskId == 1);
-    CHECK(deduped[0].deltaSeconds == 5);   // first occurrence kept, not the later duplicate
-    CHECK(deduped[1].taskId == 2);
-}
-
-void test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty() {
-    CHECK(dedupTimestampMatchCandidates({}).empty());
-}
-
 void test_parseLabelStudioTaskPage_bareArray() {
     const nlohmann::json page = nlohmann::json::array({{{"id", 1}}, {{"id", 2}}});
     const LabelStudioTaskPage parsed = parseLabelStudioTaskPage(page);
@@ -785,40 +771,6 @@ void test_isRetryableLabelStudioFailure() {
     CHECK(!isRetryableLabelStudioFailure(false, 401));
     CHECK(!isRetryableLabelStudioFailure(false, 404));
     CHECK(!isRetryableLabelStudioFailure(false, 200));
-}
-
-nlohmann::json timestampFixtureTasks() {
-    return nlohmann::json::array({
-        {{"id", 1}, {"data", {{"image", "/1.jpg"}}}, {"created_at", "2026-09-10T10:00:00Z"}},
-        {{"id", 2}, {"data", {{"image", "/2.jpg"}}}, {"created_at", "2026-09-10T10:04:00Z"}},
-        {{"id", 3}, {"data", {{"image", "/3.jpg"}}}, {"created_at", "2026-09-10T11:00:00Z"}},
-        {{"id", 4}, {"data", {{"image", "/4.jpg"}}}},
-        {{"id", 5}, {"data", {{"image", "/5.jpg"}}}, {"created_at", "not a date"}},
-        {{"id", 6}, {"data", {{"other", "/6.jpg"}}}, {"created_at", "2026-09-10T10:01:00Z"}},
-    });
-}
-
-void test_matchSummariesToTimestamps_matchesRawJsonVersion() {
-    const nlohmann::json tasks = timestampFixtureTasks();
-    const std::time_t base = *parseIso8601Utc("2026-09-10T10:01:00Z");
-    const std::vector<TimestampMatchQuery> queries = {{base, 300}, {base + 3540, 60}};
-
-    const auto fromRaw = matchTasksToTimestamps(tasks, "image", queries);
-    const auto fromSummaries = matchSummariesToTimestamps(summarizeDatasetTasks(tasks, "image"), queries);
-
-    CHECK(fromSummaries.size() == fromRaw.size());
-    for (size_t q = 0; q < fromRaw.size() && q < fromSummaries.size(); ++q) {
-        CHECK(fromSummaries[q].size() == fromRaw[q].size());
-        for (size_t i = 0; i < fromRaw[q].size() && i < fromSummaries[q].size(); ++i) {
-            CHECK(fromSummaries[q][i].taskId == fromRaw[q][i].taskId);
-            CHECK(fromSummaries[q][i].imagePath == fromRaw[q][i].imagePath);
-            CHECK(fromSummaries[q][i].deltaSeconds == fromRaw[q][i].deltaSeconds);
-        }
-    }
-    if (fromSummaries.size() == 2) {
-        CHECK(fromSummaries[0].size() == 2);   // tasks 1 (-60s) and 2 (+180s)
-        CHECK(fromSummaries[1].size() == 1);   // task 3
-    }
 }
 
 void test_selectUnlabeledFromSummaries_matchesRawJsonVersion() {
@@ -943,6 +895,7 @@ int main() {
     test_parseTypedLocalTimestamp_interpretedAsUtcWhenTzIsUtc();
     test_parseTypedLocalTimestamp_convertsFromLocalTimezone();
     test_parseTypedLocalTimestamp_malformedReturnsNullopt();
+    test_parseTypedLocalTimestamp_rejectsTruncatedOrTrailingInput();
     test_matchTasksToTimestamps_withinToleranceAndSorted();
     test_matchTasksToTimestamps_toleranceBoundaryInclusive();
     test_matchTasksToTimestamps_skipsTaskMissingCreatedAtOrDataKey();
@@ -998,15 +951,12 @@ int main() {
     test_buildBrushLabelResult_skipsEmptyMask();
     test_parseBrushResultRegions_roundTripsThroughBuild();
     test_parseBrushResultRegions_filtersByFromNameAndType();
-    test_dedupTimestampMatchCandidates_keepsFirstOccurrenceOfEachTaskId();
-    test_dedupTimestampMatchCandidates_emptyInputReturnsEmpty();
     test_parseLabelStudioTaskPage_bareArray();
     test_parseLabelStudioTaskPage_tasksKeyWithTotal();
     test_parseLabelStudioTaskPage_resultsKey();
     test_parseLabelStudioTaskPage_objectWithoutArrayHasNoTasks();
     test_isRetryableLabelStudioFailure();
 
-    test_matchSummariesToTimestamps_matchesRawJsonVersion();
     test_selectUnlabeledFromSummaries_matchesRawJsonVersion();
     test_nextLabelStudioTaskPageAction_stopsWhenTotalReachedOnFullPage();
     test_nextLabelStudioTaskPageAction_fullPageBelowTotalFetchesNext();

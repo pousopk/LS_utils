@@ -2,6 +2,7 @@
 
 #include "manager/label_studio_dataset_browser.hpp"
 #include "manager/label_studio_import.hpp"
+#include "manager/time_parse.hpp"
 
 #include <atomic>
 #include <ctime>
@@ -23,24 +24,6 @@ std::string extractXmlTagAttribute(const std::string& xml, const std::string& ta
 
 // Pure function: extractXmlTagAttribute(xml, tagName, "name").
 std::string extractXmlTagNameAttribute(const std::string& xml, const std::string& tagName);
-
-// Pure function: parses Label Studio's `created_at` timestamp format
-// (ISO-8601 UTC, e.g. "2024-05-01T12:34:56.789012Z" -- fractional seconds
-// and/or a trailing "Z" are both tolerated and ignored) into epoch
-// seconds. Returns std::nullopt if the string doesn't match
-// "%Y-%m-%dT%H:%M:%S" at minimum.
-std::optional<std::time_t> parseIso8601Utc(const std::string& value);
-
-// Parses a manually-typed factory timestamp in "YYYY/MM/DD HH:MM:SS"
-// format (e.g. "2026/09/10 12:00:00") as LOCAL time -- the timestamp
-// engraved on a physical piece reflects wherever/whenever it was
-// engraved, not UTC, and comparing it against Label Studio's UTC
-// `created_at` requires converting it first. Uses mktime, so it respects
-// the running machine's configured timezone and DST rules; this assumes
-// the machine running vision_app is set to the same timezone as the
-// factory. Returns std::nullopt on any format mismatch. Not a pure
-// function (mktime depends on the process's timezone setting).
-std::optional<std::time_t> parseTypedLocalTimestamp(const std::string& value);
 
 struct TimestampMatchQuery {
     std::time_t timestamp = 0;        // epoch seconds, e.g. from parseTypedLocalTimestamp
@@ -64,39 +47,6 @@ struct TimestampMatchCandidate {
 // than one query if the windows overlap.
 std::vector<std::vector<TimestampMatchCandidate>> matchTasksToTimestamps(
     const nlohmann::json& tasksJson, const std::string& dataImageKey, const std::vector<TimestampMatchQuery>& queries);
-
-// Pure function: the summary-based equivalent of matchTasksToTimestamps
-// -- same window test, same closest-first sort, same skip rules (a
-// summary already excludes tasks missing `id` or the image key; one
-// whose createdAt is empty or unparseable is skipped here). Exists so
-// the shared task list doesn't have to keep every task's raw JSON
-// around just for Timestamp Search.
-std::vector<std::vector<TimestampMatchCandidate>> matchSummariesToTimestamps(
-    const std::vector<DatasetTaskSummary>& summaries, const std::vector<TimestampMatchQuery>& queries);
-
-// Pure function: flattens `perQuery` (one candidate list per typed
-// timestamp entry) into a single list with each task id appearing at
-// most once -- a task matching more than one query's window should only
-// be downloaded once. The first occurrence of a task id (in `perQuery`'s
-// own order) is kept; later duplicates are dropped. Extracted out of
-// TimestampSearchWorker, which used to do this dedup itself right before
-// downloading -- now the caller does it before ever starting that
-// worker, since matching happens on the main thread (see
-// startTimestampSearch).
-std::vector<TimestampMatchCandidate> dedupTimestampMatchCandidates(
-    const std::vector<std::vector<TimestampMatchCandidate>>& perQuery);
-
-struct FindTasksNearTimestampsResult {
-    std::vector<std::vector<TimestampMatchCandidate>> perQuery;   // same order/length as `queries`
-    std::string error;   // set only on a hard failure to fetch the task list; zero candidates for a query is normal
-};
-
-// Fetches the project's full task list once (the same paged `fields=all`
-// fetch every other Label Studio flow here uses) and matches it against
-// `queries` via matchTasksToTimestamps.
-FindTasksNearTimestampsResult findTasksNearTimestamps(
-    const std::string& baseUrl, int projectId, const std::string& apiToken, const std::string& dataImageKey,
-    const std::vector<TimestampMatchQuery>& queries);
 
 struct LabelStudioTaskImageDownload {
     int downloaded = 0;
@@ -314,8 +264,8 @@ std::vector<LabelStudioUnlabeledTask> selectUnlabeledTasks(
 // every summary with neither an annotation nor a prediction. Matches it
 // exactly, since summarizeDatasetTasks derives hasAnnotation/
 // hasPrediction with the same totals-with-array-length-fallback rule and
-// skips the same tasks (missing `id` or image key). Exists for the same
-// reason as matchSummariesToTimestamps.
+// skips the same tasks (missing `id` or image key). Exists so the
+// shared task list doesn't have to keep every task's raw JSON around.
 std::vector<LabelStudioUnlabeledTask> selectUnlabeledFromSummaries(const std::vector<DatasetTaskSummary>& summaries);
 
 // Pure function: parses the leading numeric filename stem (before the

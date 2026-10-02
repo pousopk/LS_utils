@@ -3,6 +3,7 @@
 #include "ui_common/image_fit.hpp"
 #include "manager/label_studio_client.hpp"
 #include "ui_common/file_browser_utils.hpp"
+#include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
 #include "ui_common/tooltip_helpers.hpp"
@@ -151,91 +152,16 @@ void drawResultsSummary(const LabelAssistantState& state) {
     ImGui::Text("Images processed: %d   Drafted: %d", state.result.imagesProcessed, drafted);
 }
 
-// One row per drafted image, mode-agnostic so the list/sort/filter code
-// below doesn't need to branch on taskMode. Detection's confidence is the
-// mean across that image's boxes, matching batchEvalImageConfidence's
-// existing convention (model_evaluation_state.hpp) for the same class of
-// "one representative confidence per image" need.
-struct LabelAssistantImageEntry {
-    std::string filename;
-    float confidence = 0.0f;
-    std::string labelSummary;
-};
-
-std::vector<LabelAssistantImageEntry> buildImageEntries(const LabelAssistantState& state) {
-    std::vector<LabelAssistantImageEntry> entries;
-    if (state.taskMode == ComparisonTaskMode::Classification) {
-        entries.reserve(state.result.classificationDrafts.size());
-        for (const auto& draft : state.result.classificationDrafts) {
-            entries.push_back(LabelAssistantImageEntry{draft.imageFilename, draft.confidence, draft.predictedLabel});
-        }
-    } else {
-        entries.reserve(state.result.detectionDrafts.size());
-        for (const auto& draft : state.result.detectionDrafts) {
-            float sum = 0.0f;
-            for (const auto& box : draft.boxes) {
-                sum += box.confidence;
-            }
-            const float meanConfidence = draft.boxes.empty() ? 0.0f : sum / static_cast<float>(draft.boxes.size());
-            entries.push_back(LabelAssistantImageEntry{
-                draft.imageFilename, meanConfidence, std::to_string(draft.boxes.size()) + " box(es)"});
-        }
-    }
-    return entries;
-}
-
 void drawImageList(
     LabelAssistantState& state, const LabelStudioSessionState& session, const LabelTaskCallback& onLabelTask) {
     ImGui::BeginChild("LabelAssistantImageList", ImVec2(320.0f, 380.0f), true);
-    ImGui::InputTextWithHint("##LabelAssistantImageFilter", "Search filename...", &state.imageListFilter);
+    drawTextSearch("##LabelAssistantImageFilter", "Search filename...", state.imageSearch);
+    drawConfidenceSort("Sort", state.sortMode);
+    drawConfidenceFilter("Confidence filter", state.confidenceFilter);
 
-    static const char* kSortLabels[] = {"Filename", "Confidence (low first)", "Confidence (high first)"};
-    int sortIndex = static_cast<int>(state.sortMode);
-    if (ImGui::Combo("Sort", &sortIndex, kSortLabels, IM_ARRAYSIZE(kSortLabels))) {
-        state.sortMode = static_cast<LabelAssistantSortMode>(sortIndex);
-    }
-
-    static const char* kConfidenceFilterLabels[] = {"None", "< threshold", "> threshold"};
-    int confidenceFilterIndex = static_cast<int>(state.confidenceFilterMode);
-    if (ImGui::Combo(
-            "Confidence filter", &confidenceFilterIndex, kConfidenceFilterLabels,
-            IM_ARRAYSIZE(kConfidenceFilterLabels))) {
-        state.confidenceFilterMode = static_cast<LabelAssistantConfidenceFilterMode>(confidenceFilterIndex);
-    }
-    ImGui::BeginDisabled(state.confidenceFilterMode == LabelAssistantConfidenceFilterMode::None);
-    ImGui::SliderFloat("Threshold", &state.confidenceFilterThreshold, 0.0f, 1.0f, "%.2f");
-    ImGui::EndDisabled();
-
-    const std::vector<LabelAssistantImageEntry> entries = buildImageEntries(state);
-    std::vector<const LabelAssistantImageEntry*> filtered;
-    for (const auto& entry : entries) {
-        if (!fileNameMatchesFilter(std::filesystem::path(entry.filename), state.imageListFilter)) {
-            continue;
-        }
-        if (state.confidenceFilterMode != LabelAssistantConfidenceFilterMode::None) {
-            const bool passes = state.confidenceFilterMode == LabelAssistantConfidenceFilterMode::LessThan
-                ? entry.confidence < state.confidenceFilterThreshold
-                : entry.confidence > state.confidenceFilterThreshold;
-            if (!passes) {
-                continue;
-            }
-        }
-        filtered.push_back(&entry);
-    }
-
-    if (state.sortMode == LabelAssistantSortMode::ConfidenceAscending) {
-        std::sort(
-            filtered.begin(), filtered.end(),
-            [](const LabelAssistantImageEntry* a, const LabelAssistantImageEntry* b) {
-                return a->confidence < b->confidence;
-            });
-    } else if (state.sortMode == LabelAssistantSortMode::ConfidenceDescending) {
-        std::sort(
-            filtered.begin(), filtered.end(),
-            [](const LabelAssistantImageEntry* a, const LabelAssistantImageEntry* b) {
-                return a->confidence > b->confidence;
-            });
-    }
+    const std::vector<LabelAssistantImageEntry> entries = buildLabelAssistantImageEntries(state);
+    const std::vector<const LabelAssistantImageEntry*> filtered =
+        filterLabelAssistantEntries(entries, state.imageSearch, state.confidenceFilter, state.sortMode);
 
     ImGui::Separator();
     ImGui::BeginChild("LabelAssistantImageListScroll", ImVec2(0, 0), false);

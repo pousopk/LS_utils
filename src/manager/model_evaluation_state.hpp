@@ -115,8 +115,8 @@ struct BatchRuntime {
     DetectionMetrics detectionMetricsA, detectionMetricsB;
     ClassificationMetrics classificationMetricsA, classificationMetricsB;
 
-    std::string imageListFilter;  // filename search
-    BatchEvalImageSortMode imageSortMode = BatchEvalImageSortMode::Filename;
+    TextSearch imageSearch;                          // filename search
+    ConfidenceSort imageSort = ConfidenceSort::None; // None = filename order
     BatchEvalImageFilters filters;
     std::optional<std::string> selectedImageFilename;
     std::optional<std::string> renderedPreviewFilename;

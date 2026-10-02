@@ -80,6 +80,22 @@ void test_localMidnight_isStartOfThatLocalDay() {
     tzset();
 }
 
+void test_localCalendarDate_usesLocalTimezone() {
+    const char* previous = std::getenv("TZ");
+    const std::string saved = previous ? previous : "";
+    setenv("TZ", "Europe/Madrid", 1);
+    tzset();
+    // 1788213600 == 2026-09-01 00:00 CEST; one second earlier is still Aug 31 locally.
+    CHECK(localCalendarDate(1788213600) == (CalendarDate{2026, 9, 1}));
+    CHECK(localCalendarDate(1788213599) == (CalendarDate{2026, 8, 31}));
+    if (previous) {
+        setenv("TZ", saved.c_str(), 1);
+    } else {
+        unsetenv("TZ");
+    }
+    tzset();
+}
+
 } // namespace
 
 int main() {
@@ -90,6 +106,7 @@ int main() {
     test_compareCalendarDates();
     test_formatCalendarDate_zeroPads();
     test_localMidnight_isStartOfThatLocalDay();
+    test_localCalendarDate_usesLocalTimezone();
 
     if (g_failures == 0) {
         std::printf("All tests passed.\n");

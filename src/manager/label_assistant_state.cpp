@@ -262,3 +262,40 @@ void pushLabelAssistantDraftsToLabelStudio(LabelAssistantState& state, const Lab
     state.pushWorker.start(std::move(config));
     state.pushState = LabelAssistantPushState::Running;
 }
+
+std::vector<LabelAssistantImageEntry> buildLabelAssistantImageEntries(const LabelAssistantState& state) {
+    std::vector<LabelAssistantImageEntry> entries;
+    if (state.taskMode == ComparisonTaskMode::Classification) {
+        entries.reserve(state.result.classificationDrafts.size());
+        for (const auto& draft : state.result.classificationDrafts) {
+            entries.push_back(LabelAssistantImageEntry{draft.imageFilename, draft.confidence, draft.predictedLabel});
+        }
+    } else {
+        entries.reserve(state.result.detectionDrafts.size());
+        for (const auto& draft : state.result.detectionDrafts) {
+            float sum = 0.0f;
+            for (const auto& box : draft.boxes) {
+                sum += box.confidence;
+            }
+            const float meanConfidence = draft.boxes.empty() ? 0.0f : sum / static_cast<float>(draft.boxes.size());
+            entries.push_back(LabelAssistantImageEntry{
+                draft.imageFilename, meanConfidence, std::to_string(draft.boxes.size()) + " box(es)"});
+        }
+    }
+    return entries;
+}
+
+std::vector<const LabelAssistantImageEntry*> filterLabelAssistantEntries(
+    const std::vector<LabelAssistantImageEntry>& entries, const TextSearch& search, const ConfidenceFilter& confidence,
+    ConfidenceSort sort) {
+    std::vector<const LabelAssistantImageEntry*> filtered;
+    for (const auto& entry : entries) {
+        if (search.passes(entry.filename) && confidence.passes(entry.confidence)) {
+            filtered.push_back(&entry);
+        }
+    }
+    sortByConfidence(filtered, sort, [](const LabelAssistantImageEntry* entry) {
+        return std::optional<float>(entry->confidence);
+    });
+    return filtered;
+}

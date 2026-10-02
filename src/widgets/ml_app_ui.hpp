@@ -6,7 +6,6 @@
 #include "manager/label_studio_session.hpp"
 #include "manager/labeling_state.hpp"
 #include "manager/model_evaluation_state.hpp"
-#include "manager/timestamp_search_state.hpp"
 
 #include <optional>
 
@@ -15,13 +14,19 @@ enum class LabelStudioTab {
     Connection,
     Labeling,
     LabelAssistant,
-    TimestampSearch,
     DatasetBrowser,
 };
 
-// Everything the ML app draws: the Label Studio window (its five tabs
+// The main window's top-level tabs.
+enum class MainTab {
+    LabelStudio,
+    ModelEvaluation,
+};
+
+// Everything the ML app draws: one host window filling the main viewport,
+// whose top-level tab bar holds the Label Studio tab (its four sub-tabs
 // share one session and one loaded task list) and the batch Model
-// Evaluation window. Both open at startup; the Window menu reopens them.
+// Evaluation tab. Both open at startup; the Window menu reopens them.
 struct MlAppUi {
     bool showModelEvaluationWindow = true;
     ModelEvaluationState modelEvaluationState;
@@ -31,15 +36,29 @@ struct MlAppUi {
     SharedLabelStudioProjectData labelStudioProjectData;
     LabelingState labelingState;
     LabelAssistantState labelAssistantState;
-    TimestampSearchState timestampSearchState;
     DatasetBrowserState datasetBrowserState;
-    // Which tab to force-select on the next draw (consumed and cleared by drawLabelStudioWindow).
+    // Which tab to force-select on the next draw (consumed and cleared by drawLabelStudioTab).
     std::optional<LabelStudioTab> pendingLabelStudioTab;
+    // Which top-level tab to force-select on the next draw (consumed and cleared by drawMainLayout).
+    std::optional<MainTab> pendingMainTab;
 
-    // Opens the Label Studio window (if not already open) and switches it to `tab` on its next draw.
+    // Opens the Model Evaluation tab (if closed) and switches to it on the next draw.
+    void openModelEvaluationTab() {
+        showModelEvaluationWindow = true;
+        pendingMainTab = MainTab::ModelEvaluation;
+    }
+
+    // Opens the Label Studio tab (if closed) and switches it to `tab` on its next draw.
     void openLabelStudioTab(LabelStudioTab tab) {
         showLabelStudioWindow = true;
+        pendingMainTab = MainTab::LabelStudio;
         pendingLabelStudioTab = tab;
+    }
+
+    // Opens the Label Studio tab (if closed) and switches to it, keeping its current sub-tab.
+    void openLabelStudioTab() {
+        showLabelStudioWindow = true;
+        pendingMainTab = MainTab::LabelStudio;
     }
 
     // Opens the Labeling tab scoped to a specific task.
@@ -51,6 +70,6 @@ struct MlAppUi {
     // Per-frame state updates (no ImGui calls), for whichever windows are open.
     void update();
 
-    // Main menu bar plus both windows.
+    // Main menu bar plus the host window and its tabs.
     void drawMainLayout();
 };

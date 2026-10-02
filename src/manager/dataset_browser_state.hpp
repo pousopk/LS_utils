@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 #include <nlohmann/json.hpp>
 
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -54,6 +55,8 @@ struct DatasetThumbnailCache {
 struct DatasetBrowserState {
     DatasetFilterSpec filter;
     std::vector<int> matchingTaskIds;   // recomputed whenever the shared summaries or filter changes
+    std::vector<std::string> availableClassNames;   // class filter options; recomputed with matchingTaskIds on a shared-data change
+    std::map<CalendarDate, int> tasksPerDay;         // time-filter calendar marks; recomputed alongside availableClassNames
 
     // Compared against SharedLabelStudioProjectData's own version/
     // lastFetchKey each frame (see updateDatasetBrowserState): `version`
@@ -103,10 +106,12 @@ void startDatasetBrowserExport(
 
 // Called once per frame while the Dataset Browser tab is open. Compares
 // sharedData.lastFetchKey against state.lastSeenSharedFetchKey: on a
-// change (project switch or reconnect), clears thumbnailCache and points
+// change (project switch or reconnect), clears thumbnailCache and the
+// class filter (another project's class is meaningless here) and points
 // thumbnailWorker at the new connection. Compares sharedData.version
 // against state.lastAppliedSharedVersion: on a change (any successful
-// refresh), re-runs reapplyDatasetBrowserFilter. Also drains
+// refresh), recomputes availableClassNames and tasksPerDay and re-runs
+// reapplyDatasetBrowserFilter. Also drains
 // thumbnailWorker's decoded results into thumbnailCache as textures, and
 // polls exportWorker's progress/result.
 void updateDatasetBrowserState(

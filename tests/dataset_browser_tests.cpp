@@ -5,6 +5,9 @@
 #include <opencv2/core.hpp>
 
 #include <cstdio>
+#include <map>
+#include <cstdlib>
+#include <ctime>
 #include <sstream>
 #include <unordered_set>
 
@@ -124,7 +127,7 @@ void test_filterDatasetTasks_annotationHasExcludesTasksWithoutAnnotation() {
         DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
     };
     DatasetFilterSpec filter;
-    filter.annotationFilter = DatasetPresenceFilter::Has;
+    filter.annotation.presence = Presence::Has;
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 1);
@@ -136,7 +139,7 @@ void test_filterDatasetTasks_predictionLacksExcludesTasksWithPrediction() {
         DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
     };
     DatasetFilterSpec filter;
-    filter.predictionFilter = DatasetPresenceFilter::Lacks;
+    filter.prediction.presence = Presence::Lacks;
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 2);
@@ -148,7 +151,7 @@ void test_filterDatasetTasks_classNameFilterRequiresExactMatch() {
         DatasetTaskSummary{2, "/b.jpg", true, false, {"Dog"}, std::nullopt, std::nullopt},
     };
     DatasetFilterSpec filter;
-    filter.classNameFilter = "Cat";
+    filter.cls.className = "Cat";
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 1);
@@ -160,8 +163,8 @@ void test_filterDatasetTasks_confidenceLessThanUsesMinConfidence() {
         DatasetTaskSummary{2, "/b.jpg", false, true, {}, 0.6f, 0.9f},
     };
     DatasetFilterSpec filter;
-    filter.confidenceFilterMode = DatasetConfidenceFilterMode::LessThan;
-    filter.confidenceThreshold = 0.5f;
+    filter.confidence.mode = ThresholdMode::LessThan;
+    filter.confidence.threshold = 0.5f;
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 1);
@@ -173,8 +176,8 @@ void test_filterDatasetTasks_confidenceGreaterThanUsesMaxConfidence() {
         DatasetTaskSummary{2, "/b.jpg", false, true, {}, 0.6f, 0.9f},
     };
     DatasetFilterSpec filter;
-    filter.confidenceFilterMode = DatasetConfidenceFilterMode::GreaterThan;
-    filter.confidenceThreshold = 0.5f;
+    filter.confidence.mode = ThresholdMode::GreaterThan;
+    filter.confidence.threshold = 0.5f;
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 2);
@@ -185,8 +188,8 @@ void test_filterDatasetTasks_confidenceFilterExcludesTasksWithNoPrediction() {
         DatasetTaskSummary{1, "/a.jpg", false, false, {}, std::nullopt, std::nullopt},
     };
     DatasetFilterSpec filter;
-    filter.confidenceFilterMode = DatasetConfidenceFilterMode::GreaterThan;
-    filter.confidenceThreshold = 0.0f;
+    filter.confidence.mode = ThresholdMode::GreaterThan;
+    filter.confidence.threshold = 0.0f;
     CHECK(filterDatasetTasks(summaries, filter).empty());
 }
 
@@ -196,8 +199,8 @@ void test_filterDatasetTasks_combinesMultipleDimensions() {
         DatasetTaskSummary{2, "/b.jpg", true, true, {"Dog"}, 0.7f, 0.9f},
     };
     DatasetFilterSpec filter;
-    filter.annotationFilter = DatasetPresenceFilter::Has;
-    filter.classNameFilter = "Cat";
+    filter.annotation.presence = Presence::Has;
+    filter.cls.className = "Cat";
     const auto matching = filterDatasetTasks(summaries, filter);
     CHECK(matching.size() == 1);
     CHECK(matching[0] == 1);
@@ -209,6 +212,102 @@ void test_filterDatasetTasks_allDefaultsMatchesEverything() {
         DatasetTaskSummary{2, "/b.jpg", false, false, {}, std::nullopt, std::nullopt},
     };
     CHECK(filterDatasetTasks(summaries, DatasetFilterSpec{}).size() == 2);
+}
+
+// 2026-09-10T12:00:00Z; main() sets TZ=UTC so typed times equal UTC.
+constexpr std::time_t kNoon = 1789041600;
+
+DatasetTaskSummary taskAt(int taskId, std::optional<std::time_t> createdAtEpoch, bool hasAnnotation = false) {
+    DatasetTaskSummary summary;
+    summary.taskId = taskId;
+    summary.imagePath = "/img.jpg";
+    summary.hasAnnotation = hasAnnotation;
+    summary.createdAtEpoch = createdAtEpoch;
+    return summary;
+}
+
+void test_summarizeDatasetTasks_parsesCreatedAtEpoch() {
+    const nlohmann::json tasks = nlohmann::json::parse(R"([
+        {"id": 1, "data": {"image": "/a.jpg"}, "created_at": "2026-09-10T12:00:00.123456Z"},
+        {"id": 2, "data": {"image": "/b.jpg"}, "created_at": "not a time"},
+        {"id": 3, "data": {"image": "/c.jpg"}}
+    ])");
+    const auto summaries = summarizeDatasetTasks(tasks, "image");
+    CHECK(summaries.size() == 3);
+    CHECK(summaries[0].createdAtEpoch == kNoon);
+    CHECK(!summaries[1].createdAtEpoch.has_value());
+    CHECK(!summaries[2].createdAtEpoch.has_value());
+}
+
+void test_filterDatasetTasks_aroundTimeSortsClosestFirst() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        taskAt(1, kNoon + 90), taskAt(2, kNoon - 10), taskAt(3, kNoon + 500), taskAt(4, kNoon + 10),
+    };
+    DatasetFilterSpec filter;
+    filter.time.mode = TimeWindowMode::AroundTime;
+    filter.time.centerDate = CalendarDate{2026, 9, 10};
+    filter.time.centerTime = "12:00:00";
+    filter.time.toleranceMinutes = 2;
+    // 3 is outside +/-120 s; 2 and 4 tie at 10 s -> task id order.
+    CHECK(filterDatasetTasks(summaries, filter) == (std::vector<int>{2, 4, 1}));
+}
+
+void test_filterDatasetTasks_rangeKeepsListOrder() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        taskAt(1, kNoon + 50), taskAt(2, kNoon - 50), taskAt(3, kNoon + 10),
+    };
+    DatasetFilterSpec filter;
+    filter.time.mode = TimeWindowMode::Range;
+    filter.time.fromDate = CalendarDate{2026, 9, 10};
+    filter.time.fromTime = "12:00:00";
+    CHECK(filterDatasetTasks(summaries, filter) == (std::vector<int>{1, 3}));
+}
+
+void test_filterDatasetTasks_timeWindowAndsWithOtherFilters() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        taskAt(1, kNoon, /*hasAnnotation=*/true), taskAt(2, kNoon, /*hasAnnotation=*/false),
+    };
+    DatasetFilterSpec filter;
+    filter.annotation.presence = Presence::Lacks;
+    filter.time.mode = TimeWindowMode::AroundTime;
+    filter.time.centerDate = CalendarDate{2026, 9, 10};
+    filter.time.centerTime = "12:00:00";
+    CHECK(filterDatasetTasks(summaries, filter) == (std::vector<int>{2}));
+}
+
+void test_filterDatasetTasks_timeWindowExcludesTasksWithoutCreatedAt() {
+    const std::vector<DatasetTaskSummary> summaries = {taskAt(1, std::nullopt), taskAt(2, kNoon)};
+    DatasetFilterSpec filter;
+    filter.time.mode = TimeWindowMode::Range;
+    filter.time.toDate = CalendarDate{2026, 9, 10};
+    filter.time.toTime = "13:00:00";
+    CHECK(filterDatasetTasks(summaries, filter) == (std::vector<int>{2}));
+}
+
+void test_filterDatasetTasks_invalidTimeWindowIsInactive() {
+    const std::vector<DatasetTaskSummary> summaries = {taskAt(1, std::nullopt), taskAt(2, kNoon + 99999)};
+    DatasetFilterSpec filter;
+    filter.time.mode = TimeWindowMode::AroundTime;
+    filter.time.centerDate = CalendarDate{2026, 9, 10};
+    filter.time.centerTime = "12:0";   // half typed
+    CHECK(filterDatasetTasks(summaries, filter) == (std::vector<int>{1, 2}));
+}
+
+void test_collectDatasetClassNames_sortedUnique() {
+    std::vector<DatasetTaskSummary> summaries(2);
+    summaries[0].classNames = {"Dog", "Cat"};
+    summaries[1].classNames = {"Cat", "Bird"};
+    CHECK(collectDatasetClassNames(summaries) == (std::vector<std::string>{"Bird", "Cat", "Dog"}));
+}
+
+void test_countTasksPerLocalDay_skipsTasksWithoutCreatedAt() {
+    const std::vector<DatasetTaskSummary> summaries = {
+        taskAt(1, kNoon), taskAt(2, kNoon + 3600), taskAt(3, kNoon + 86400), taskAt(4, std::nullopt),
+    };
+    const std::map<CalendarDate, int> counts = countTasksPerLocalDay(summaries);
+    CHECK(counts.size() == 2);
+    CHECK(counts.at(CalendarDate{2026, 9, 10}) == 2);
+    CHECK(counts.at(CalendarDate{2026, 9, 11}) == 1);
 }
 
 void test_buildDatasetExportJson_returnsOnlyMatchingTasks() {
@@ -605,6 +704,17 @@ void test_writeMatchingTasksAsJsonArrayElements_writesEachTaskOnceAcrossPages() 
 } // namespace
 
 int main() {
+    setenv("TZ", "UTC", 1);
+    tzset();
+
+    test_summarizeDatasetTasks_parsesCreatedAtEpoch();
+    test_filterDatasetTasks_aroundTimeSortsClosestFirst();
+    test_filterDatasetTasks_rangeKeepsListOrder();
+    test_filterDatasetTasks_timeWindowAndsWithOtherFilters();
+    test_filterDatasetTasks_timeWindowExcludesTasksWithoutCreatedAt();
+    test_filterDatasetTasks_invalidTimeWindowIsInactive();
+    test_collectDatasetClassNames_sortedUnique();
+    test_countTasksPerLocalDay_skipsTasksWithoutCreatedAt();
     test_summarizeDatasetTasks_basicFieldsAndAnnotationPredictionPresence();
     test_summarizeDatasetTasks_fallsBackToArrayLengthWithoutTotalsFields();
     test_summarizeDatasetTasks_collectsClassNamesFromAnnotationAndPrediction();

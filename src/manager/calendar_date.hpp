@@ -39,5 +39,9 @@ std::string formatCalendarDate(const CalendarDate& date);
 // timezone setting, like parseTypedLocalTimestamp.
 std::time_t localMidnight(const CalendarDate& date);
 
+// The local calendar day `t` falls on (localtime_r). Not pure: depends
+// on the process's timezone setting, like localMidnight.
+CalendarDate localCalendarDate(std::time_t t);
+
 // Today's date in local time. Not pure (reads the clock).
 CalendarDate todayLocal();

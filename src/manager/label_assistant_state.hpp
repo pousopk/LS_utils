@@ -1,5 +1,6 @@
 #pragma once
 
+#include "manager/item_filters.hpp"
 #include "manager/label_assistant_worker.hpp"
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_push_worker.hpp"
@@ -11,6 +12,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 enum class LabelAssistantRunState {
     NotStarted,
@@ -28,18 +30,6 @@ enum class LabelAssistantPushState {
     Running,
     Complete,
     Cancelled,
-};
-
-enum class LabelAssistantSortMode {
-    Filename,
-    ConfidenceAscending,
-    ConfidenceDescending,
-};
-
-enum class LabelAssistantConfidenceFilterMode {
-    None,
-    LessThan,
-    GreaterThan,
 };
 
 enum class LabelAssistantFilePickerTarget {
@@ -67,10 +57,9 @@ struct LabelAssistantState {
     LabelAssistantProgress lastProgress;
     LabelAssistantResult result;
 
-    std::string imageListFilter;
-    LabelAssistantSortMode sortMode = LabelAssistantSortMode::Filename;
-    LabelAssistantConfidenceFilterMode confidenceFilterMode = LabelAssistantConfidenceFilterMode::None;
-    float confidenceFilterThreshold = 0.5f;
+    TextSearch imageSearch;
+    ConfidenceSort sortMode = ConfidenceSort::None;   // None = filename order
+    ConfidenceFilter confidenceFilter;
     std::optional<std::string> selectedImageFilename;
     std::optional<std::string> renderedPreviewFilename;
     GLuint previewTexture = 0;
@@ -122,6 +111,27 @@ struct LabelAssistantState {
     std::string filePickerSelectedFile;
     std::string filePickerFilter;
 };
+
+// One row per drafted image, mode-agnostic so the list/sort/filter code
+// below doesn't need to branch on taskMode. Detection's confidence is the
+// mean across that image's boxes, matching batchEvalImageConfidence's
+// existing convention (model_evaluation_state.hpp) for the same class of
+// "one representative confidence per image" need.
+struct LabelAssistantImageEntry {
+    std::string filename;
+    float confidence = 0.0f;
+    std::string labelSummary;
+};
+
+// One entry per drafted image in state.result, for the current taskMode.
+std::vector<LabelAssistantImageEntry> buildLabelAssistantImageEntries(const LabelAssistantState& state);
+
+// Pure function: the entries passing `search` (filename) and
+// `confidence`, then ordered by `sort` (stable; None keeps `entries`
+// order). Pointers point into `entries`.
+std::vector<const LabelAssistantImageEntry*> filterLabelAssistantEntries(
+    const std::vector<LabelAssistantImageEntry>& entries, const TextSearch& search, const ConfidenceFilter& confidence,
+    ConfidenceSort sort);
 
 // (Re)loads state.modelConfig's model per state.taskMode. Thin wrapper
 // around the shared loadModelSlot(ModelSlotConfig&, ComparisonTaskMode).

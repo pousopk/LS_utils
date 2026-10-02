@@ -217,14 +217,14 @@ void test_filters_confidenceFilterUsesBasis() {
     const BatchImageResult image = detImage({det("a", kBoxA, 0.2f), det("b", kBoxA, 0.9f)});  // mean 0.55
 
     BatchEvalImageFilters f;
-    f.confidenceFilterMode = BatchEvalConfidenceFilterMode::LessThan;
-    f.confidenceFilterThreshold = 0.5f;
+    f.confidence.mode = ThresholdMode::LessThan;
+    f.confidence.threshold = 0.5f;
     CHECK(!passes(mode, &image, nullptr, f));  // mean 0.55 is not < 0.5
     f.confidenceBasis = BatchEvalConfidenceBasis::Lowest;
     CHECK(passes(mode, &image, nullptr, f));   // lowest 0.2 < 0.5
 
-    f.confidenceFilterMode = BatchEvalConfidenceFilterMode::GreaterThan;
-    f.confidenceFilterThreshold = 0.8f;
+    f.confidence.mode = ThresholdMode::GreaterThan;
+    f.confidence.threshold = 0.8f;
     CHECK(!passes(mode, &image, nullptr, f));  // lowest 0.2
     f.confidenceBasis = BatchEvalConfidenceBasis::Highest;
     CHECK(passes(mode, &image, nullptr, f));   // highest 0.9
@@ -239,12 +239,12 @@ void test_filters_detectionPresence() {
     const BatchImageResult none = detImage({});
 
     BatchEvalImageFilters f;
-    f.detectionPresenceFilter = BatchEvalDetectionPresenceFilter::NoDetections;
+    f.detections.presence = Presence::Lacks;
     CHECK(passes(mode, &none, nullptr, f));
     CHECK(!passes(mode, &some, nullptr, f));  // null slot B must not count as "no detections"
     CHECK(passes(mode, &some, &none, f));
 
-    f.detectionPresenceFilter = BatchEvalDetectionPresenceFilter::HasDetections;
+    f.detections.presence = Presence::Has;
     CHECK(passes(mode, &some, nullptr, f));
     CHECK(!passes(mode, &none, nullptr, f));
 
@@ -259,18 +259,18 @@ void test_classFilter_aloneMatchesGroundTruthOrPrediction() {
     const BatchImageResult other = detImage({det("dent", kBoxA)}, {gt("dent", kBoxA)});
 
     BatchEvalImageFilters f;
-    f.classFilter = "scratch";
+    f.cls.className = "scratch";
     CHECK(passes(mode, &gtOnly, nullptr, f));
     CHECK(passes(mode, &predOnly, nullptr, f));
     CHECK(!passes(mode, &other, nullptr, f));
     CHECK(passes(mode, &other, &predOnly, f));  // either slot
 
     const BatchImageResult clsGt = clsImage("dog", "cat");
-    f.classFilter = "cat";
+    f.cls.className = "cat";
     CHECK(passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
-    f.classFilter = "dog";
+    f.cls.className = "dog";
     CHECK(passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
-    f.classFilter = "bird";
+    f.cls.className = "bird";
     CHECK(!passes(ComparisonTaskMode::Classification, &clsGt, nullptr, f));
 }
 
@@ -282,16 +282,16 @@ void test_classFilter_scopesDetectionErrors() {
         {gt("scratch", kBoxA), gt("dent", cv::Rect(50, 50, 10, 10))});
 
     BatchEvalImageFilters f;
-    f.classFilter = "scratch";
+    f.cls.className = "scratch";
     f.errorFilter = BatchEvalErrorFilter::AnyError;
     CHECK(!passes(mode, &image, nullptr, f));  // no scratch errors
-    f.classFilter = "dent";
+    f.cls.className = "dent";
     CHECK(passes(mode, &image, nullptr, f));
     f.errorFilter = BatchEvalErrorFilter::Missed;
     CHECK(passes(mode, &image, nullptr, f));
     f.errorFilter = BatchEvalErrorFilter::FalsePositives;
     CHECK(passes(mode, &image, nullptr, f));
-    f.classFilter = "scratch";
+    f.cls.className = "scratch";
     CHECK(!passes(mode, &image, nullptr, f));
 }
 
@@ -300,11 +300,11 @@ void test_classFilter_scopesMisclassificationEitherDirection() {
     const BatchImageResult catAsDog = clsImage("dog", "cat");
     BatchEvalImageFilters f;
     f.errorFilter = BatchEvalErrorFilter::AnyError;
-    f.classFilter = "cat";
+    f.cls.className = "cat";
     CHECK(passes(mode, &catAsDog, nullptr, f));   // true label
-    f.classFilter = "dog";
+    f.cls.className = "dog";
     CHECK(passes(mode, &catAsDog, nullptr, f));   // predicted label
-    f.classFilter = "bird";
+    f.cls.className = "bird";
     CHECK(!passes(mode, &catAsDog, nullptr, f));
 }
 

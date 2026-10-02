@@ -2,6 +2,7 @@
 
 #include "ui_common/image_fit.hpp"
 #include "ui_common/file_browser_utils.hpp"
+#include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "ui_common/tooltip_helpers.hpp"
 
@@ -18,35 +19,11 @@ constexpr int kGridLookaheadRows = 2;
 
 void drawFilterControls(DatasetBrowserState& state, const SharedLabelStudioProjectData& sharedData) {
     bool filterChanged = false;
-
-    static const char* kPresenceLabels[] = {"Any", "Has", "Lacks"};
-
-    int annotationIndex = static_cast<int>(state.filter.annotationFilter);
-    if (ImGui::Combo("Annotation", &annotationIndex, kPresenceLabels, IM_ARRAYSIZE(kPresenceLabels))) {
-        state.filter.annotationFilter = static_cast<DatasetPresenceFilter>(annotationIndex);
-        filterChanged = true;
-    }
-    int predictionIndex = static_cast<int>(state.filter.predictionFilter);
-    if (ImGui::Combo("Prediction", &predictionIndex, kPresenceLabels, IM_ARRAYSIZE(kPresenceLabels))) {
-        state.filter.predictionFilter = static_cast<DatasetPresenceFilter>(predictionIndex);
-        filterChanged = true;
-    }
-
-    if (ImGui::InputText("Class name", &state.filter.classNameFilter)) {
-        filterChanged = true;
-    }
-
-    static const char* kConfidenceLabels[] = {"None", "< threshold", "> threshold"};
-    int confidenceIndex = static_cast<int>(state.filter.confidenceFilterMode);
-    if (ImGui::Combo("Confidence filter", &confidenceIndex, kConfidenceLabels, IM_ARRAYSIZE(kConfidenceLabels))) {
-        state.filter.confidenceFilterMode = static_cast<DatasetConfidenceFilterMode>(confidenceIndex);
-        filterChanged = true;
-    }
-    ImGui::BeginDisabled(state.filter.confidenceFilterMode == DatasetConfidenceFilterMode::None);
-    if (ImGui::SliderFloat("Threshold", &state.filter.confidenceThreshold, 0.0f, 1.0f, "%.2f")) {
-        filterChanged = true;
-    }
-    ImGui::EndDisabled();
+    filterChanged |= drawPresenceFilter("Annotation", state.filter.annotation);
+    filterChanged |= drawPresenceFilter("Prediction", state.filter.prediction);
+    filterChanged |= drawClassFilter("Class", state.filter.cls, state.availableClassNames);
+    filterChanged |= drawConfidenceFilter("Confidence filter", state.filter.confidence);
+    filterChanged |= drawTimeWindowFilter("CreatedFilter", state.filter.time, &state.tasksPerDay);
 
     if (filterChanged) {
         reapplyDatasetBrowserFilter(state, sharedData);
@@ -176,6 +153,17 @@ void drawSelectedTaskDetail(DatasetBrowserState& state, const SharedLabelStudioP
     ImGui::Text("Task #%d", summary.taskId);
     ImGui::Text("Annotation: %s", summary.hasAnnotation ? "yes" : "no");
     ImGui::Text("Prediction: %s", summary.hasPrediction ? "yes" : "no");
+    if (!summary.createdAt.empty()) {
+        ImGui::Text("Created: %s", summary.createdAt.c_str());
+    }
+    if (const std::optional<TimeWindow> window = state.filter.time.resolve();
+        window && window->center && summary.createdAtEpoch) {
+        const long long delta =
+            static_cast<long long>(*summary.createdAtEpoch) - static_cast<long long>(*window->center);
+        ImGui::Text(
+            "Delta: %+lld s from %s %s", delta, formatCalendarDate(*state.filter.time.centerDate).c_str(),
+            state.filter.time.centerTime.c_str());
+    }
     if (summary.minConfidence && summary.maxConfidence) {
         ImGui::Text("Confidence: %.2f - %.2f", *summary.minConfidence, *summary.maxConfidence);
     }

@@ -2,6 +2,8 @@
 
 #include <imgui.h>
 
+#include <map>
+
 #include <string>
 
 namespace {
@@ -12,10 +14,14 @@ constexpr const char* kMonthNames[12] = {
 };
 constexpr const char* kWeekdayHeaders[7] = {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"};
 constexpr float kDayCellWidth = 26.0f;
+// The theme's muted accent (ui_theme.cpp kAccentMuted).
+constexpr ImVec4 kMarkedDayColor(0.902f, 0.451f, 0.086f, 0.35f);
 
 } // namespace
 
-bool DatePickerButton(const char* label, std::optional<CalendarDate>& value, const char* emptyText) {
+bool DatePickerButton(
+    const char* label, std::optional<CalendarDate>& value, const char* emptyText,
+    const std::map<CalendarDate, int>* markedDays) {
     bool changed = false;
     ImGui::PushID(label);
 
@@ -77,6 +83,16 @@ bool DatePickerButton(const char* label, std::optional<CalendarDate>& value, con
                 const CalendarDate cell{view.year, view.month, day};
                 const bool isSelected = value && *value == cell;
                 const bool isToday = cell == today;
+                int markedCount = 0;
+                if (markedDays != nullptr) {
+                    const auto it = markedDays->find(cell);
+                    if (it != markedDays->end()) {
+                        markedCount = it->second;
+                    }
+                }
+                if (markedCount > 0) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::GetColorU32(kMarkedDayColor));
+                }
                 if (isToday) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.75f, 1.0f, 1.0f));
                 }
@@ -86,12 +102,18 @@ bool DatePickerButton(const char* label, std::optional<CalendarDate>& value, con
                     changed = true;
                     ImGui::CloseCurrentPopup();
                 }
+                if (markedCount > 0 && ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%d picture(s)", markedCount);
+                }
                 ImGui::PopID();
                 if (isToday) {
                     ImGui::PopStyleColor();
                 }
             }
             ImGui::EndTable();
+        }
+        if (markedDays != nullptr) {
+            ImGui::TextDisabled(markedDays->empty() ? "No pictures loaded" : "Tinted days have pictures");
         }
 
         ImGui::Separator();

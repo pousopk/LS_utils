@@ -2,7 +2,7 @@
 
 A C++ desktop application for labeling and model-evaluation work against [Label Studio](https://labelstud.io/) and ONNX models. The UI is GLFW + OpenGL + [Dear ImGui](https://github.com/ocornut/imgui).
 
-It opens two windows. The **Label Studio** window has Connection, Labeling, Label Assistant, Find by Timestamp and Dataset Browser tabs that share one connection and one loaded task list. The **Model Evaluation** window loads one or two ONNX models (detector, classifier or anomaly model) and evaluates them over a batch of images — a local folder or a Label Studio project as ground truth — with precision/recall/AP metrics, confusion matrices and drill-down filters. The **Window** menu reopens either window.
+The main window has two tabs. The **Label Studio** tab has Connection, Labeling, Label Assistant and Dataset Browser tabs that share one connection and one loaded task list. The **Model Evaluation** tab loads one or two ONNX models (detector, classifier or anomaly model) and evaluates them over a batch of images — a local folder or a Label Studio project as ground truth — with precision/recall/AP metrics, confusion matrices and drill-down filters. Either tab can be closed; the **Window** menu reopens it.
 
 ## Features
 
@@ -57,7 +57,7 @@ cmake -S . -B build && cmake --build build -j && ctest --test-dir build --output
 
 ## Project structure
 
-- `src/manager/` — non-UI state and workers: Label Studio API client, shared task list, labeling, label assistant, timestamp search, dataset browser, ONNX inference, batch evaluation and metrics.
+- `src/manager/` — non-UI state and workers: Label Studio API client, shared task list, labeling, label assistant, dataset browser, generic list filters, ONNX inference, batch evaluation and metrics.
 - `src/widgets/` — the ImGui presentation layer, one file per window/tab.
 - `src/main.cpp` — the main loop.
 - `ui_common/` — generic UI helpers (app shell, GL texture upload, file browser, theme).

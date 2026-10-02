@@ -6,7 +6,6 @@
 #include "widgets/date_picker.hpp"
 #include "widgets/label_assistant_window.hpp"
 #include "widgets/labeling_window.hpp"
-#include "widgets/timestamp_search_window.hpp"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -132,19 +131,15 @@ void drawConnectionTabContent(LabelStudioSessionState& session, SharedLabelStudi
 
 } // namespace
 
-void drawLabelStudioWindow(MlAppUi& ui) {
+void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
     bool windowOpen = ui.showLabelStudioWindow;
     if (!windowOpen) {
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(1200.0f, 900.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Label Studio", &windowOpen)) {
-        ImGui::End();
-        return;
-    }
+    const bool tabVisible = ImGui::BeginTabItem("Label Studio", &windowOpen, flags);
 
-    // Closing the whole window while the Labeling tab has unsaved edits is
+    // Closing the whole tab while the Labeling tab has unsaved edits is
     // the same hazard the standalone Labeling window used to guard against
     // -- veto the close and let its own unsaved-changes prompt (rendered
     // inside drawLabelingTabContent) decide what happens next.
@@ -152,8 +147,13 @@ void drawLabelStudioWindow(MlAppUi& ui) {
         windowOpen = true;
         ui.labelingState.unsavedPromptOpen = true;
         ui.labelingState.unsavedPromptAction = LabelingUnsavedPromptAction::CloseWindow;
+        // The prompt only renders inside the Labeling tab, so bring it forward.
+        ui.openLabelStudioTab(LabelStudioTab::Labeling);
     }
     ui.showLabelStudioWindow = windowOpen;
+    if (!tabVisible) {
+        return;
+    }
 
     auto onLabelTask = [&ui](int taskId) { ui.openLabelingForTask(taskId); };
     auto onOpenConnectionTab = [&ui] { ui.openLabelStudioTab(LabelStudioTab::Connection); };
@@ -190,17 +190,6 @@ void drawLabelStudioWindow(MlAppUi& ui) {
             ImGui::EndTabItem();
         }
 
-        ImGuiTabItemFlags timestampSearchFlags = ImGuiTabItemFlags_None;
-        if (ui.pendingLabelStudioTab == LabelStudioTab::TimestampSearch) {
-            timestampSearchFlags |= ImGuiTabItemFlags_SetSelected;
-        }
-        if (ImGui::BeginTabItem("Find by Timestamp", nullptr, timestampSearchFlags)) {
-            drawTimestampSearchTabContent(
-                ui.timestampSearchState, ui.labelStudioSession, ui.labelStudioProjectData, onLabelTask,
-                onOpenConnectionTab);
-            ImGui::EndTabItem();
-        }
-
         ImGuiTabItemFlags datasetBrowserFlags = ImGuiTabItemFlags_None;
         if (ui.pendingLabelStudioTab == LabelStudioTab::DatasetBrowser) {
             datasetBrowserFlags |= ImGuiTabItemFlags_SetSelected;
@@ -215,5 +204,5 @@ void drawLabelStudioWindow(MlAppUi& ui) {
         ImGui::EndTabBar();
     }
 
-    ImGui::End();
+    ImGui::EndTabItem();
 }

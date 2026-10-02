@@ -3,18 +3,21 @@
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 
+#include <imgui.h>
+
 #include <functional>
 
 struct MlAppUi;
 
-// The merged Label Studio window: one Begin/End wrapping a tab bar with
-// Connection/Labeling/Label Assistant/Find by Timestamp tabs (formerly four
-// separate top-level windows). Takes MlAppUi& directly -- like
+// The merged Label Studio tab of the main window: one closable tab item
+// wrapping a nested tab bar with Connection/Labeling/Label Assistant/Dataset
+// Browser tabs. Must be called inside a BeginTabBar; draws
+// nothing while ui.showLabelStudioWindow is false. Takes MlAppUi& directly -- like
 // drawConnectionSidebar, this widget's whole job is coordinating several of
 // MlAppUi's own states (labelStudioSession, labelingState, labelAssistantState,
-// timestampSearchState, pendingLabelStudioTab), so that coupling is
+// datasetBrowserState, pendingMainTab, pendingLabelStudioTab), so that coupling is
 // intrinsic rather than something to hide behind narrower parameters.
-void drawLabelStudioWindow(MlAppUi& ui);
+void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags);
 
 // Read-only summary shown by every LS-consuming tab/window in place of its
 // own connection-field inputs: "Connected: <project>" with a button to

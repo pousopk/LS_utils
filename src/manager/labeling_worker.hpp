@@ -49,7 +49,7 @@ struct LabelingJobResult {
 
 // Runs exactly one of FetchTaskList/FetchTaskDetail/SubmitAnnotation on a
 // single background thread, following the same shape as
-// TimestampSearchWorker/LabelAssistantWorker. Not copyable. Reuse one
+// LabelAssistantWorker. Not copyable. Reuse one
 // instance -- start() joins any previous thread first, so only one job is
 // ever in flight, matching the UI's expectation that the user waits for
 // one operation before starting another.
