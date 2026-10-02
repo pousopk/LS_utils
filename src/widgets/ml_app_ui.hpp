@@ -2,6 +2,7 @@
 
 #include "manager/dataset_browser_state.hpp"
 #include "manager/label_assistant_state.hpp"
+#include "manager/label_studio_profiles_state.hpp"
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
 #include "manager/labeling_state.hpp"
@@ -33,6 +34,8 @@ struct MlAppUi {
 
     bool showLabelStudioWindow = true;
     LabelStudioSessionState labelStudioSession;
+    // Saved connection profiles for the Connection tab; read from disk once, here.
+    LabelStudioProfilesState labelStudioProfiles = loadLabelStudioProfilesState();
     SharedLabelStudioProjectData labelStudioProjectData;
     LabelingState labelingState;
     LabelAssistantState labelAssistantState;

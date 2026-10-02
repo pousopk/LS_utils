@@ -1,5 +1,6 @@
 #include "widgets/label_studio_window.hpp"
 
+#include "manager/label_studio_profiles_state.hpp"
 #include "manager/labeling_state.hpp"
 #include "widgets/ml_app_ui.hpp"
 #include "widgets/dataset_browser_window.hpp"
@@ -77,9 +78,119 @@ void drawImportDateRangeControls(SharedLabelStudioProjectData& sharedData, const
     }
 }
 
-// Content for the Connection tab: base URL/token, Connect, import date
-// range, project list.
-void drawConnectionTabContent(LabelStudioSessionState& session, SharedLabelStudioProjectData& sharedData) {
+constexpr ImVec4 kErrorColor(1.0f, 0.4f, 0.4f, 1.0f);
+constexpr ImVec4 kWarningColor(1.0f, 0.7f, 0.2f, 1.0f);
+
+// "Save as..." modal: name field, and an Overwrite button (with a warning)
+// in place of Save when the name is taken. Closes after any attempt; a
+// failure shows under the profile row.
+void drawSaveProfileAsPopup(LabelStudioProfilesState& profiles, const LabelStudioSessionState& session) {
+    if (!ImGui::BeginPopupModal("Save profile as", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::InputText("Name", &profiles.saveAsName);
+    const std::string name = trimLabelStudioProfileName(profiles.saveAsName);
+    const bool exists = findLabelStudioProfile(profiles.store, name) != nullptr;
+    if (exists) {
+        ImGui::TextColored(kWarningColor, "A profile named \"%s\" exists; saving overwrites it.", name.c_str());
+    }
+    ImGui::BeginDisabled(name.empty());
+    if (ImGui::Button(exists ? "Overwrite" : "Save")) {
+        saveLabelStudioProfileAs(profiles, name, session);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void drawDeleteProfilePopup(LabelStudioProfilesState& profiles) {
+    if (!ImGui::BeginPopupModal("Delete profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    ImGui::Text("Delete profile \"%s\"?", profiles.selectedName.c_str());
+    ImGui::TextDisabled("The Base URL and API Token fields are kept.");
+    if (ImGui::Button("Delete")) {
+        deleteSelectedLabelStudioProfile(profiles);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+// Profile picker above the URL/token fields: choosing a profile fills them
+// in (it doesn't connect); Save / Save as... / Delete write the profiles
+// file right away. Load/save errors and warnings show underneath.
+void drawProfileRow(LabelStudioProfilesState& profiles, LabelStudioSessionState& session) {
+    const char* preview = profiles.selectedName.empty() ? "(none)" : profiles.selectedName.c_str();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Profile", preview)) {
+        if (ImGui::Selectable("(none)", profiles.selectedName.empty())) {
+            selectLabelStudioProfile(profiles, "", session);
+        }
+        for (size_t i = 0; i < profiles.store.profiles.size(); ++i) {
+            const LabelStudioProfile& profile = profiles.store.profiles[i];
+            ImGui::PushID(static_cast<int>(i));   // names may contain "##"
+            if (ImGui::Selectable(profile.name.c_str(), profile.name == profiles.selectedName)) {
+                selectLabelStudioProfile(profiles, profile.name, session);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+
+    const bool editable = canEditLabelStudioProfiles(profiles);
+    const bool hasFields = !session.baseUrl.empty() && !session.apiToken.empty();
+    const bool hasSelection = !profiles.selectedName.empty();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(
+        !editable || !hasSelection || !hasFields || !selectedLabelStudioProfileDiffers(profiles, session));
+    if (ImGui::Button("Save##Profile")) {
+        saveSelectedLabelStudioProfile(profiles, session);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!editable || !hasFields);
+    if (ImGui::Button("Save as...##Profile")) {
+        profiles.saveAsName = profiles.selectedName;
+        ImGui::OpenPopup("Save profile as");
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!editable || !hasSelection);
+    if (ImGui::Button("Delete##Profile")) {
+        ImGui::OpenPopup("Delete profile");
+    }
+    ImGui::EndDisabled();
+
+    drawSaveProfileAsPopup(profiles, session);
+    drawDeleteProfilePopup(profiles);
+
+    if (!profiles.error.empty()) {
+        ImGui::TextColored(kErrorColor, "%s", profiles.error.c_str());
+    }
+    if (!profiles.warning.empty()) {
+        ImGui::TextColored(kWarningColor, "%s", profiles.warning.c_str());
+    }
+}
+
+// Content for the Connection tab: saved profiles, base URL/token, Connect,
+// import date range, project list.
+void drawConnectionTabContent(
+    LabelStudioSessionState& session, LabelStudioProfilesState& profiles, SharedLabelStudioProjectData& sharedData) {
+    drawProfileRow(profiles, session);
     ImGui::InputText("Base URL", &session.baseUrl);
     ImGui::InputText("API Token", &session.apiToken, ImGuiInputTextFlags_Password);
 
@@ -164,7 +275,7 @@ void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
             connectionFlags |= ImGuiTabItemFlags_SetSelected;
         }
         if (ImGui::BeginTabItem("Connection", nullptr, connectionFlags)) {
-            drawConnectionTabContent(ui.labelStudioSession, ui.labelStudioProjectData);
+            drawConnectionTabContent(ui.labelStudioSession, ui.labelStudioProfiles, ui.labelStudioProjectData);
             ImGui::EndTabItem();
         }
 
