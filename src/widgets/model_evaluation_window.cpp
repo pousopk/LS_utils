@@ -811,17 +811,9 @@ void drawPickerPopup(ModelEvaluationState& state) {
 
 } // namespace
 
-void drawModelEvaluationTab(
-    bool* show, ImGuiTabItemFlags flags, ModelEvaluationState& state, const LabelStudioSessionState& session,
+void drawBenchmarkTabContent(
+    ModelEvaluationState& state, const LabelStudioSessionState& session,
     const std::function<void()>& onOpenLabelStudioWindow) {
-    if (!*show) {
-        return;
-    }
-
-    if (!ImGui::BeginTabItem("Model Evaluation", show, flags)) {
-        return;
-    }
-
     drawTaskModeToggle(state);
     drawModelCountToggle(state);
     ImGui::Separator();
@@ -840,6 +832,4 @@ void drawModelEvaluationTab(
     drawBatchBody(state, session, onOpenLabelStudioWindow);
 
     drawPickerPopup(state);
-
-    ImGui::EndTabItem();
 }

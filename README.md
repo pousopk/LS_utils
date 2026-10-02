@@ -2,17 +2,17 @@
 
 A C++ desktop application for labeling and model-evaluation work against [Label Studio](https://labelstud.io/) and ONNX models. The UI is GLFW + OpenGL + [Dear ImGui](https://github.com/ocornut/imgui).
 
-The main window has two tabs. The **Label Studio** tab has Connection, Labeling, Label Assistant and Dataset Browser tabs that share one connection and one loaded task list. The **Model Evaluation** tab loads one or two ONNX models (detector, classifier or anomaly model) and evaluates them over a batch of images — a local folder or a Label Studio project as ground truth — with precision/recall/AP metrics, confusion matrices and drill-down filters. Either tab can be closed; the **Window** menu reopens it.
+The main window has two tabs. The **Label Studio** tab has Connection, Labeling and Dataset Browser tabs that share one connection and one loaded task list. The **Models** tab groups the tools that run ONNX models: **Benchmark** loads one or two models (detector, classifier or anomaly model) and evaluates them over a batch of images — a local folder or a Label Studio project as ground truth — with precision/recall/AP metrics, confusion matrices and drill-down filters; **Label Assistant** drafts predictions with a trained model and pushes them to Label Studio over the Label Studio tab's connection. Either tab can be closed; the **Window** menu reopens it.
 
 ## Features
 
-### Model evaluation
+### Benchmark (Models tab)
 - Load one or two ONNX models and compare them side by side over a batch of images.
 - ONNX Runtime backend (GPU-optional) with automatic input-shape/preprocessing/class-name detection from model metadata.
 - Detection, classification and anomaly modes.
 - Batch mode against a folder of images or a Label Studio project, with ground-truth import, precision/recall/AP metrics, confusion matrices, drill-down filters, and a random-sample mode for large datasets on slow hardware.
 
-### Label Assistant (auto-labeling)
+### Label Assistant (Models tab, auto-labeling)
 - Run an already-trained ONNX classifier or detector directly over a folder of unlabeled images to draft predictions.
 - Review drafted labels (sortable/filterable by confidence) with a live preview, including box overlays in Detection mode.
 - Push predictions straight to a Label Studio project over its REST API, in two modes:

@@ -9,8 +9,8 @@
 
 using LabelTaskCallback = std::function<void(int taskId)>;
 
-// Content for the Label Assistant tab of the merged Label Studio window
-// (no Begin/End of its own).
+// Content for the Label Assistant tab of the Models tab (no Begin/End of
+// its own).
 void drawLabelAssistantTabContent(
     LabelAssistantState& state, const LabelStudioSessionState& session, const SharedLabelStudioProjectData& sharedData,
     const LabelTaskCallback& onLabelTask, const std::function<void()>& onOpenLabelStudioWindow);

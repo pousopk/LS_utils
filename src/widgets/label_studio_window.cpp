@@ -5,7 +5,6 @@
 #include "widgets/ml_app_ui.hpp"
 #include "widgets/dataset_browser_window.hpp"
 #include "widgets/date_picker.hpp"
-#include "widgets/label_assistant_window.hpp"
 #include "widgets/labeling_window.hpp"
 
 #include <imgui.h>
@@ -266,7 +265,6 @@ void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
         return;
     }
 
-    auto onLabelTask = [&ui](int taskId) { ui.openLabelingForTask(taskId); };
     auto onOpenConnectionTab = [&ui] { ui.openLabelStudioTab(LabelStudioTab::Connection); };
 
     if (ImGui::BeginTabBar("LabelStudioTabs")) {
@@ -286,17 +284,6 @@ void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags) {
         if (ImGui::BeginTabItem("Labeling", nullptr, labelingFlags)) {
             drawLabelingTabContent(
                 &ui.showLabelStudioWindow, ui.labelingState, ui.labelStudioSession, ui.labelStudioProjectData,
-                onOpenConnectionTab);
-            ImGui::EndTabItem();
-        }
-
-        ImGuiTabItemFlags labelAssistantFlags = ImGuiTabItemFlags_None;
-        if (ui.pendingLabelStudioTab == LabelStudioTab::LabelAssistant) {
-            labelAssistantFlags |= ImGuiTabItemFlags_SetSelected;
-        }
-        if (ImGui::BeginTabItem("Label Assistant", nullptr, labelAssistantFlags)) {
-            drawLabelAssistantTabContent(
-                ui.labelAssistantState, ui.labelStudioSession, ui.labelStudioProjectData, onLabelTask,
                 onOpenConnectionTab);
             ImGui::EndTabItem();
         }

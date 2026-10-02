@@ -10,11 +10,11 @@
 struct MlAppUi;
 
 // The merged Label Studio tab of the main window: one closable tab item
-// wrapping a nested tab bar with Connection/Labeling/Label Assistant/Dataset
-// Browser tabs. Must be called inside a BeginTabBar; draws
+// wrapping a nested tab bar with Connection/Labeling/Dataset Browser tabs.
+// Must be called inside a BeginTabBar; draws
 // nothing while ui.showLabelStudioWindow is false. Takes MlAppUi& directly -- like
 // drawConnectionSidebar, this widget's whole job is coordinating several of
-// MlAppUi's own states (labelStudioSession, labelingState, labelAssistantState,
+// MlAppUi's own states (labelStudioSession, labelingState,
 // datasetBrowserState, pendingMainTab, pendingLabelStudioTab), so that coupling is
 // intrinsic rather than something to hide behind narrower parameters.
 void drawLabelStudioTab(MlAppUi& ui, ImGuiTabItemFlags flags);

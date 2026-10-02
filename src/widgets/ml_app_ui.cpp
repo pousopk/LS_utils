@@ -1,7 +1,7 @@
 #include "widgets/ml_app_ui.hpp"
 
 #include "widgets/label_studio_window.hpp"
-#include "widgets/model_evaluation_window.hpp"
+#include "widgets/models_window.hpp"
 
 #include <imgui.h>
 
@@ -9,15 +9,20 @@
 #include <utility>
 
 void MlAppUi::update() {
-    if (showModelEvaluationWindow) {
+    // The shared task list feeds Label Assistant (Models tab) as well as the
+    // Label Studio tab's own tools, so it refreshes while either tab is open
+    // -- and before any of the states below read it.
+    if (showLabelStudioWindow || showModelsWindow) {
+        updateSharedLabelStudioProjectData(labelStudioProjectData, labelStudioSession);
+    }
+    if (showModelsWindow) {
         updateBatchRuntime(
             modelEvaluationState.taskMode, modelEvaluationState.slots, modelEvaluationState.batch.imageFolderPath,
             modelEvaluationState.batch, labelStudioSession);
+        updateLabelAssistantState(labelAssistantState, labelStudioSession, labelStudioProjectData);
     }
     if (showLabelStudioWindow) {
-        updateSharedLabelStudioProjectData(labelStudioProjectData, labelStudioSession);
         updateLabelingState(labelingState, labelStudioSession, labelStudioProjectData);
-        updateLabelAssistantState(labelAssistantState, labelStudioSession, labelStudioProjectData);
         updateDatasetBrowserState(datasetBrowserState, labelStudioSession, labelStudioProjectData);
     }
 }
@@ -28,8 +33,8 @@ void MlAppUi::drawMainLayout() {
             if (ImGui::MenuItem("Label Studio", nullptr, showLabelStudioWindow)) {
                 openLabelStudioTab();
             }
-            if (ImGui::MenuItem("Model Evaluation", nullptr, showModelEvaluationWindow)) {
-                openModelEvaluationTab();
+            if (ImGui::MenuItem("Models", nullptr, showModelsWindow)) {
+                openModelsTab();
             }
             ImGui::EndMenu();
         }
@@ -54,7 +59,7 @@ void MlAppUi::drawMainLayout() {
     ImGui::PopStyleVar(2);
     if (hostVisible && ImGui::BeginTabBar("MainTabs")) {
         // Taken up front, not reset afterwards: the tabs drawn below can
-        // request a switch themselves (e.g. Model Evaluation's "open the
+        // request a switch themselves (e.g. Benchmark's "open the
         // connection tab" button), and that request has to survive to
         // the next frame to take effect.
         const std::optional<MainTab> pending = std::exchange(pendingMainTab, std::nullopt);
@@ -62,9 +67,7 @@ void MlAppUi::drawMainLayout() {
             return pending == tab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
         };
         drawLabelStudioTab(*this, selectFlags(MainTab::LabelStudio));
-        drawModelEvaluationTab(
-            &showModelEvaluationWindow, selectFlags(MainTab::ModelEvaluation), modelEvaluationState,
-            labelStudioSession, [this] { openLabelStudioTab(LabelStudioTab::Connection); });
+        drawModelsTab(*this, selectFlags(MainTab::Models));
         ImGui::EndTabBar();
     }
     ImGui::End();

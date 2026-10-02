@@ -14,23 +14,32 @@
 enum class LabelStudioTab {
     Connection,
     Labeling,
-    LabelAssistant,
     DatasetBrowser,
+};
+
+// The Models tab's sub-tabs.
+enum class ModelsTab {
+    Benchmark,
+    LabelAssistant,
 };
 
 // The main window's top-level tabs.
 enum class MainTab {
     LabelStudio,
-    ModelEvaluation,
+    Models,
 };
 
 // Everything the ML app draws: one host window filling the main viewport,
-// whose top-level tab bar holds the Label Studio tab (its four sub-tabs
-// share one session and one loaded task list) and the batch Model
-// Evaluation tab. Both open at startup; the Window menu reopens them.
+// whose top-level tab bar holds the Label Studio tab (Connection, Labeling
+// and Dataset Browser, sharing one session and one loaded task list) and the
+// Models tab (Benchmark and Label Assistant, the tools that run ONNX models;
+// Label Assistant reads the same session and task list). Both open at
+// startup; the Window menu reopens them.
 struct MlAppUi {
-    bool showModelEvaluationWindow = true;
+    bool showModelsWindow = true;
     ModelEvaluationState modelEvaluationState;
+    // Which Models sub-tab to force-select on the next draw (consumed and cleared by drawModelsTab).
+    std::optional<ModelsTab> pendingModelsTab;
 
     bool showLabelStudioWindow = true;
     LabelStudioSessionState labelStudioSession;
@@ -45,10 +54,16 @@ struct MlAppUi {
     // Which top-level tab to force-select on the next draw (consumed and cleared by drawMainLayout).
     std::optional<MainTab> pendingMainTab;
 
-    // Opens the Model Evaluation tab (if closed) and switches to it on the next draw.
-    void openModelEvaluationTab() {
-        showModelEvaluationWindow = true;
-        pendingMainTab = MainTab::ModelEvaluation;
+    // Opens the Models tab (if closed) and switches to it, keeping its current sub-tab.
+    void openModelsTab() {
+        showModelsWindow = true;
+        pendingMainTab = MainTab::Models;
+    }
+
+    // Opens the Models tab (if closed) and switches it to `tab` on its next draw.
+    void openModelsTab(ModelsTab tab) {
+        openModelsTab();
+        pendingModelsTab = tab;
     }
 
     // Opens the Label Studio tab (if closed) and switches it to `tab` on its next draw.
