@@ -1,6 +1,6 @@
 #include "widgets/model_evaluation_window.hpp"
 
-#include "ui_common/file_browser_utils.hpp"
+#include "ui_common/path_picker.hpp"
 #include "ui_common/image_fit.hpp"
 #include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
@@ -78,13 +78,13 @@ void drawSlotConfig(ModelEvaluationState& state, int slotIndex) {
     const bool loadClicked = drawModelSlotConfigFields(
         slot.onnxPath, slot.classNamesPath, slot.inputWidth, slot.inputHeight, confThreshold, nmsThreshold, nullptr,
         slot.autoDetectStatus, slot.loadError,
-        [&state, modelTarget]() {
+        [&state, &slot, modelTarget]() {
             state.filePickerTarget = modelTarget;
-            state.filePickerOpen = true;
+            openPathPicker(state.picker, PathPickerMode::File, "Pick ONNX Model", slot.onnxPath);
         },
-        [&state, classNamesTarget]() {
+        [&state, &slot, classNamesTarget]() {
             state.filePickerTarget = classNamesTarget;
-            state.filePickerOpen = true;
+            openPathPicker(state.picker, PathPickerMode::File, "Pick Class Names File", slot.classNamesPath);
         });
 
     if (!slot.engineStatus.empty()) {
@@ -134,8 +134,8 @@ void drawLocalFolderAndGroundTruthPickers(ModelEvaluationState& state) {
     ImGui::TextWrapped(
         "Image Folder: %s", state.batch.imageFolderPath.empty() ? "(none)" : state.batch.imageFolderPath.c_str());
     if (ImGui::Button("Browse Folder...")) {
-        state.batch.folderPickerExplorerDir = state.batch.imageFolderPath;
-        state.batch.folderPickerOpen = true;
+        state.filePickerTarget = FilePickerTarget::ImageFolder;
+        openPathPicker(state.picker, PathPickerMode::Folder, "Pick Image Folder", state.batch.imageFolderPath);
     }
 
     ImGui::TextWrapped(
@@ -143,7 +143,8 @@ void drawLocalFolderAndGroundTruthPickers(ModelEvaluationState& state) {
         state.batch.groundTruthJsonPath.empty() ? "(none)" : state.batch.groundTruthJsonPath.c_str());
     if (ImGui::Button("Browse Ground Truth...")) {
         state.filePickerTarget = FilePickerTarget::GroundTruthJson;
-        state.filePickerOpen = true;
+        openPathPicker(
+            state.picker, PathPickerMode::File, "Pick Ground Truth JSON", state.batch.groundTruthJsonPath);
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear Ground Truth")) {
@@ -776,91 +777,35 @@ void drawBatchBody(
     }
 }
 
-void drawFolderPickerPopup(ModelEvaluationState& state) {
-    if (state.batch.folderPickerOpen) {
-        ImGui::OpenPopup("Pick Image Folder");
-        state.batch.folderPickerOpen = false;
+void drawPickerPopup(ModelEvaluationState& state) {
+    const std::optional<std::filesystem::path> picked = drawPathPicker(state.picker, "ModelEvalPicker");
+    if (!picked) {
+        return;
     }
-
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Pick Image Folder", nullptr)) {
-        std::string selected;
-        if (drawDirectoryBrowser(
-                state.batch.folderPickerExplorerDir, &selected, "BatchEvalFolderPickerDirs",
-                state.batch.folderPickerFilter)) {
-            state.batch.imageFolderPath = selected;
+    const std::string path = picked->string();
+    switch (state.filePickerTarget) {
+        case FilePickerTarget::ImageFolder:
+            state.batch.imageFolderPath = path;
             resetModelEvaluationResults(state);
-            ImGui::CloseCurrentPopup();
-        }
-        if (ImGui::Button("Close")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-}
-
-void drawFilePickerPopup(ModelEvaluationState& state) {
-    if (state.filePickerOpen) {
-        ImGui::OpenPopup("Pick Model Evaluation File");
-        state.filePickerOpen = false;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Pick Model Evaluation File", nullptr)) {
-        namespace fs = std::filesystem;
-
-        const std::string dirBeforeBrowse = state.filePickerDir;
-        drawDirectoryBrowser(state.filePickerDir, nullptr, "ModelEvalFilePickerDirs", state.filePickerFilter);
-        if (state.filePickerDir != dirBeforeBrowse) {
-            state.filePickerSelectedFile.clear();
-        }
-
-        ImGui::BeginChild("ModelEvalFilePickerFiles", ImVec2(0, 260.0f), true);
-        for (const auto& file : listFiles(fs::path(state.filePickerDir))) {
-            if (!fileNameMatchesFilter(file, state.filePickerFilter)) {
-                continue;
-            }
-            const std::string filePath = file.string();
-            const bool selected = (filePath == state.filePickerSelectedFile);
-            if (ImGui::Selectable(file.filename().string().c_str(), selected)) {
-                state.filePickerSelectedFile = filePath;
-            }
-        }
-        ImGui::EndChild();
-
-        if (!state.filePickerSelectedFile.empty()) {
-            ImGui::TextWrapped("Selected: %s", state.filePickerSelectedFile.c_str());
-        }
-
-        if (ImGui::Button("Use Selected File") && !state.filePickerSelectedFile.empty()) {
-            switch (state.filePickerTarget) {
-                case FilePickerTarget::SlotAModel:
-                    state.slots[0].onnxPath = state.filePickerSelectedFile;
-                    applyAutoDetectToModelSlot(state.slots[0], state.taskMode);
-                    break;
-                case FilePickerTarget::SlotAClassNames:
-                    state.slots[0].classNamesPath = state.filePickerSelectedFile;
-                    break;
-                case FilePickerTarget::SlotBModel:
-                    state.slots[1].onnxPath = state.filePickerSelectedFile;
-                    applyAutoDetectToModelSlot(state.slots[1], state.taskMode);
-                    break;
-                case FilePickerTarget::SlotBClassNames:
-                    state.slots[1].classNamesPath = state.filePickerSelectedFile;
-                    break;
-                case FilePickerTarget::GroundTruthJson:
-                    state.batch.groundTruthJsonPath = state.filePickerSelectedFile;
-                    loadBatchEvalGroundTruth(state.batch);
-                    break;
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Close")) {
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
+            break;
+        case FilePickerTarget::SlotAModel:
+            state.slots[0].onnxPath = path;
+            applyAutoDetectToModelSlot(state.slots[0], state.taskMode);
+            break;
+        case FilePickerTarget::SlotAClassNames:
+            state.slots[0].classNamesPath = path;
+            break;
+        case FilePickerTarget::SlotBModel:
+            state.slots[1].onnxPath = path;
+            applyAutoDetectToModelSlot(state.slots[1], state.taskMode);
+            break;
+        case FilePickerTarget::SlotBClassNames:
+            state.slots[1].classNamesPath = path;
+            break;
+        case FilePickerTarget::GroundTruthJson:
+            state.batch.groundTruthJsonPath = path;
+            loadBatchEvalGroundTruth(state.batch);
+            break;
     }
 }
 
@@ -894,8 +839,7 @@ void drawModelEvaluationTab(
 
     drawBatchBody(state, session, onOpenLabelStudioWindow);
 
-    drawFolderPickerPopup(state);
-    drawFilePickerPopup(state);
+    drawPickerPopup(state);
 
     ImGui::EndTabItem();
 }

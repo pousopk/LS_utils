@@ -7,6 +7,7 @@
 #include "manager/label_studio_session.hpp"
 #include "manager/model_evaluation_state.hpp"
 #include "manager/onnx_metadata.hpp"
+#include "ui_common/path_picker.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -33,6 +34,7 @@ enum class LabelAssistantPushState {
 };
 
 enum class LabelAssistantFilePickerTarget {
+    ImageFolder,
     OnnxModel,
     ClassNamesFile,
 };
@@ -44,7 +46,7 @@ struct LabelAssistantState {
     ComparisonTaskMode taskMode = ComparisonTaskMode::Classification;
     ModelSlotConfig modelConfig;   // reused from model_evaluation_state.hpp
 
-    // LocalFolder: imageFolderPath is user-picked (see folderPickerOpen
+    // LocalFolder: imageFolderPath is user-picked (see picker
     // below). LabelStudioProject: startLabelAssistantRun sets
     // imageFolderPath to a hidden scratch folder it downloads unlabeled
     // task images into first -- from that point on, review/preview/export
@@ -98,18 +100,10 @@ struct LabelAssistantState {
     std::string lastAutoFetchKey;
     std::string labelStudioAutoFetchStatus;
 
-    // Folder-picker popup state -- image folder only.
-    bool folderPickerOpen = false;
-    std::string folderPickerExplorerDir;
-    std::string folderPickerFilter;
-
-    // Shared file-picker popup state, reused for onnx model / class names
-    // file selection.
-    bool filePickerOpen = false;
+    // Shared picker popup, reused for the image folder, onnx model and
+    // class names file; filePickerTarget says which field a pick fills.
+    PathPickerState picker;
     LabelAssistantFilePickerTarget filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
-    std::string filePickerDir;
-    std::string filePickerSelectedFile;
-    std::string filePickerFilter;
 };
 
 // One row per drafted image, mode-agnostic so the list/sort/filter code

@@ -2,6 +2,7 @@
 
 #include "manager/anomaly_inference.hpp"
 #include "ui_common/gl_texture.hpp"
+#include "ui_common/path_picker.hpp"
 #include "manager/batch_eval_filters.hpp"
 #include "manager/batch_evaluation_worker.hpp"
 #include "manager/classification_inference.hpp"
@@ -130,10 +131,6 @@ struct BatchRuntime {
     // Per-slot preview texture for the currently selected image (the
     // per-image detail pane).
     std::array<BatchPreviewTexture, 2> previewTextures;
-
-    bool folderPickerOpen = false;
-    std::string folderPickerExplorerDir;
-    std::string folderPickerFilter;
 };
 
 // Loads and parses batch.groundTruthJsonPath into batch.groundTruth,
@@ -175,6 +172,7 @@ void updateBatchRuntime(
     BatchRuntime& batch, const LabelStudioSessionState& session);
 
 enum class FilePickerTarget {
+    ImageFolder,
     SlotAModel,
     SlotAClassNames,
     SlotBModel,
@@ -190,12 +188,10 @@ struct ModelEvaluationState {
 
     BatchRuntime batch;
 
-    // Shared file-picker popup state, reused for onnx/class-names/ground-truth selection across both slots.
-    bool filePickerOpen = false;
+    // Shared picker popup, reused for the image folder and onnx/class-names/
+    // ground-truth selection across both slots; filePickerTarget says which.
+    PathPickerState picker;
     FilePickerTarget filePickerTarget = FilePickerTarget::SlotAModel;
-    std::string filePickerDir;
-    std::string filePickerSelectedFile;
-    std::string filePickerFilter;
 };
 
 // Resets batch results (resultA/B, metrics, run state, selection) and

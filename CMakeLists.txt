@@ -90,7 +90,7 @@ set(ML_TESTS
     batch_eval_filters_tests calendar_date_tests dataset_browser_tests detection_metrics_tests
     image_fit_tests item_filters_tests label_assistant_control_tag_tests label_assistant_filter_tests
     label_studio_client_tests label_studio_project_data_tests label_studio_session_tests labeling_state_tests
-    obb_detection_tests pugixml_smoke_tests)
+    obb_detection_tests path_picker_tests pugixml_smoke_tests)
 foreach(test ${ML_TESTS})
     add_executable(${test} tests/${test}.cpp)
     target_link_libraries(${test} PRIVATE ml_core)

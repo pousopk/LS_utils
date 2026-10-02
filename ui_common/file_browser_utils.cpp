@@ -1,8 +1,5 @@
 #include "ui_common/file_browser_utils.hpp"
 
-#include <imgui.h>
-#include <misc/cpp/imgui_stdlib.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -102,53 +99,4 @@ bool fileNameMatchesFilter(const std::filesystem::path& file, std::string_view f
     }
     const std::string name = toLowerCopy(file.filename().string());
     return name.find(toLowerCopy(filterText)) != std::string::npos;
-}
-
-bool drawDirectoryBrowser(
-    std::string& explorerDirectory, std::string* selectedDirectory, const char* listChildId,
-    std::string& filterText) {
-    namespace fs = std::filesystem;
-    fs::path explorerPath = normalizeDirectoryOrDefault(fs::path(explorerDirectory));
-    explorerDirectory = explorerPath.string();
-
-    ImGui::TextWrapped("%s", explorerDirectory.c_str());
-    if (ImGui::Button("Up")) {
-        const fs::path parent = explorerPath.parent_path();
-        if (!parent.empty()) {
-            explorerDirectory = parent.string();
-        }
-    }
-
-    bool usedFolder = false;
-    if (selectedDirectory != nullptr) {
-        ImGui::SameLine();
-        if (ImGui::Button("Use this folder")) {
-            *selectedDirectory = explorerDirectory;
-            usedFolder = true;
-        }
-    }
-
-    ImGui::PushID(listChildId);
-    ImGui::InputTextWithHint("Filter", "Search folders...", &filterText);
-    ImGui::PopID();
-
-    if (ImGui::BeginChild(listChildId, ImVec2(0, 200.0f), true)) {
-        const auto dirs = listDirectories(explorerPath);
-        bool anyShown = false;
-        for (const auto& dir : dirs) {
-            if (!fileNameMatchesFilter(dir, filterText)) {
-                continue;
-            }
-            anyShown = true;
-            const std::string name = dir.filename().string();
-            if (ImGui::Selectable(name.c_str(), false)) {
-                explorerDirectory = dir.string();
-            }
-        }
-        if (!anyShown) {
-            ImGui::TextDisabled(dirs.empty() ? "No subdirectories found." : "No subdirectories match filter.");
-        }
-    }
-    ImGui::EndChild();
-    return usedFolder;
 }

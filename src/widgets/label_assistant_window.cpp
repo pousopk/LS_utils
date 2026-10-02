@@ -2,7 +2,7 @@
 
 #include "ui_common/image_fit.hpp"
 #include "manager/label_studio_client.hpp"
-#include "ui_common/file_browser_utils.hpp"
+#include "ui_common/path_picker.hpp"
 #include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "widgets/model_slot_config_widget.hpp"
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -72,11 +73,12 @@ void drawModelConfig(LabelAssistantState& state) {
         state.modelConfig.autoDetectStatus, state.modelConfig.loadError,
         [&state]() {
             state.filePickerTarget = LabelAssistantFilePickerTarget::OnnxModel;
-            state.filePickerOpen = true;
+            openPathPicker(state.picker, PathPickerMode::File, "Pick ONNX Model", state.modelConfig.onnxPath);
         },
         [&state]() {
             state.filePickerTarget = LabelAssistantFilePickerTarget::ClassNamesFile;
-            state.filePickerOpen = true;
+            openPathPicker(
+                state.picker, PathPickerMode::File, "Pick Class Names File", state.modelConfig.classNamesPath);
         });
 
     if (!state.modelConfig.engineStatus.empty()) {
@@ -92,8 +94,8 @@ void drawFolderPicker(LabelAssistantState& state) {
     ImGui::TextWrapped(
         "Image Folder: %s", state.imageFolderPath.empty() ? "(none)" : state.imageFolderPath.c_str());
     if (ImGui::Button("Browse Folder...")) {
-        state.folderPickerExplorerDir = state.imageFolderPath;
-        state.folderPickerOpen = true;
+        state.filePickerTarget = LabelAssistantFilePickerTarget::ImageFolder;
+        openPathPicker(state.picker, PathPickerMode::Folder, "Pick Image Folder", state.imageFolderPath);
     }
 }
 
@@ -280,82 +282,25 @@ void drawExportSection(
     }
 }
 
-void drawFolderPickerPopup(LabelAssistantState& state) {
-    if (state.folderPickerOpen) {
-        ImGui::OpenPopup("Pick Label Assistant Folder");
-        state.folderPickerOpen = false;
+void drawPickerPopup(LabelAssistantState& state) {
+    const std::optional<std::filesystem::path> picked = drawPathPicker(state.picker, "LabelAssistantPicker");
+    if (!picked) {
+        return;
     }
-
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Pick Label Assistant Folder", nullptr)) {
-        std::string selected;
-        if (drawDirectoryBrowser(
-                state.folderPickerExplorerDir, &selected, "LabelAssistantFolderPickerDirs",
-                state.folderPickerFilter)) {
-            state.imageFolderPath = selected;
+    switch (state.filePickerTarget) {
+        case LabelAssistantFilePickerTarget::ImageFolder:
+            state.imageFolderPath = picked->string();
             state.runState = LabelAssistantRunState::NotStarted;
             state.result = LabelAssistantResult{};
             state.selectedImageFilename.reset();
-            ImGui::CloseCurrentPopup();
-        }
-        if (ImGui::Button("Close")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-}
-
-void drawFilePickerPopup(LabelAssistantState& state) {
-    if (state.filePickerOpen) {
-        ImGui::OpenPopup("Pick Label Assistant File");
-        state.filePickerOpen = false;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Pick Label Assistant File", nullptr)) {
-        namespace fs = std::filesystem;
-
-        const std::string dirBeforeBrowse = state.filePickerDir;
-        drawDirectoryBrowser(state.filePickerDir, nullptr, "LabelAssistantFilePickerDirs", state.filePickerFilter);
-        if (state.filePickerDir != dirBeforeBrowse) {
-            state.filePickerSelectedFile.clear();
-        }
-
-        ImGui::BeginChild("LabelAssistantFilePickerFiles", ImVec2(0, 260.0f), true);
-        for (const auto& file : listFiles(fs::path(state.filePickerDir))) {
-            if (!fileNameMatchesFilter(file, state.filePickerFilter)) {
-                continue;
-            }
-            const std::string filePath = file.string();
-            const bool selected = (filePath == state.filePickerSelectedFile);
-            if (ImGui::Selectable(file.filename().string().c_str(), selected)) {
-                state.filePickerSelectedFile = filePath;
-            }
-        }
-        ImGui::EndChild();
-
-        if (!state.filePickerSelectedFile.empty()) {
-            ImGui::TextWrapped("Selected: %s", state.filePickerSelectedFile.c_str());
-        }
-
-        if (ImGui::Button("Use Selected File") && !state.filePickerSelectedFile.empty()) {
-            switch (state.filePickerTarget) {
-                case LabelAssistantFilePickerTarget::OnnxModel:
-                    state.modelConfig.onnxPath = state.filePickerSelectedFile;
-                    applyLabelAssistantAutoDetect(state);
-                    break;
-                case LabelAssistantFilePickerTarget::ClassNamesFile:
-                    state.modelConfig.classNamesPath = state.filePickerSelectedFile;
-                    break;
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Close")) {
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
+            break;
+        case LabelAssistantFilePickerTarget::OnnxModel:
+            state.modelConfig.onnxPath = picked->string();
+            applyLabelAssistantAutoDetect(state);
+            break;
+        case LabelAssistantFilePickerTarget::ClassNamesFile:
+            state.modelConfig.classNamesPath = picked->string();
+            break;
     }
 }
 
@@ -396,6 +341,5 @@ void drawLabelAssistantTabContent(
         }
     }
 
-    drawFolderPickerPopup(state);
-    drawFilePickerPopup(state);
+    drawPickerPopup(state);
 }

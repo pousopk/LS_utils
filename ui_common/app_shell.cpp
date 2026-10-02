@@ -1,5 +1,6 @@
 #include "ui_common/app_shell.hpp"
 
+#include "ui_common/path_picker.hpp"
 #include "ui_common/ui_theme.hpp"
 
 #include <GLFW/glfw3.h>
@@ -45,6 +46,8 @@ bool AppShell::init(const AppShellConfig& config, std::string& error) {
     ImGui::CreateContext();
     iniFilename_ = config.iniFilename;
     ImGui::GetIO().IniFilename = iniFilename_.empty() ? nullptr : iniFilename_.c_str();
+    // Before the first NewFrame, which is when ImGui loads the ini.
+    registerPathPickerSettingsHandler();
     applyProfessionalTheme();
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init("#version 130");

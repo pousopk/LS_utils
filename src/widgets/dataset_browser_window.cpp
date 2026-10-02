@@ -1,7 +1,7 @@
 #include "widgets/dataset_browser_window.hpp"
 
 #include "ui_common/image_fit.hpp"
-#include "ui_common/file_browser_utils.hpp"
+#include "ui_common/path_picker.hpp"
 #include "widgets/filter_widgets.hpp"
 #include "widgets/label_studio_window.hpp"
 #include "ui_common/tooltip_helpers.hpp"
@@ -191,24 +191,8 @@ void drawSelectedTaskDetail(DatasetBrowserState& state, const SharedLabelStudioP
 }
 
 void drawExportFolderPickerPopup(DatasetBrowserState& state) {
-    if (state.exportFolderPickerOpen) {
-        ImGui::OpenPopup("Pick Dataset Export Folder");
-        state.exportFolderPickerOpen = false;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Pick Dataset Export Folder", nullptr)) {
-        std::string selected;
-        if (drawDirectoryBrowser(
-                state.exportFolderPickerExplorerDir, &selected, "DatasetExportFolderPickerDirs",
-                state.exportFolderPickerFilter)) {
-            state.exportDestinationFolder = selected;
-            ImGui::CloseCurrentPopup();
-        }
-        if (ImGui::Button("Close")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+    if (const auto picked = drawPathPicker(state.exportFolderPicker, "DatasetExportFolderPicker")) {
+        state.exportDestinationFolder = picked->string();
     }
 }
 
@@ -218,8 +202,8 @@ void drawExportSection(
     ImGui::TextWrapped(
         "Export folder: %s", state.exportDestinationFolder.empty() ? "(none)" : state.exportDestinationFolder.c_str());
     if (ImGui::Button("Browse Folder...")) {
-        state.exportFolderPickerExplorerDir = state.exportDestinationFolder;
-        state.exportFolderPickerOpen = true;
+        openPathPicker(
+            state.exportFolderPicker, PathPickerMode::Folder, "Pick Export Folder", state.exportDestinationFolder);
     }
 
     if (state.exportState == DatasetExportState::Running) {

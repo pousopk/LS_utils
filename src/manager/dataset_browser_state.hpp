@@ -6,6 +6,7 @@
 #include "manager/label_studio_dataset_browser.hpp"
 #include "manager/label_studio_project_data.hpp"
 #include "manager/label_studio_session.hpp"
+#include "ui_common/path_picker.hpp"
 
 #include <GLFW/glfw3.h>
 #include <nlohmann/json.hpp>
@@ -81,9 +82,7 @@ struct DatasetBrowserState {
     DatasetOverlayMode overlayMode = DatasetOverlayMode::Annotations;
 
     std::string exportDestinationFolder;
-    bool exportFolderPickerOpen = false;
-    std::string exportFolderPickerExplorerDir;
-    std::string exportFolderPickerFilter;
+    PathPickerState exportFolderPicker;
     DatasetExportWorker exportWorker;
     DatasetExportState exportState = DatasetExportState::NotStarted;
     DatasetExportProgress lastExportProgress;
