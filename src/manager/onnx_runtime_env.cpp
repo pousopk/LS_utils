@@ -19,12 +19,24 @@ OrtSessionResult createOrtSession(const std::string& onnxPath) {
         result.gpuActive = false;
     }
 
+    if (result.gpuActive) {
+        try {
+            result.session = std::make_unique<Ort::Session>(sharedOrtEnv(), onnxPath.c_str(), sessionOptions);
+            return result;
+        } catch (const Ort::Exception&) {
+            // Appending the CUDA provider doesn't touch the GPU; device init
+            // happens at session creation, so a broken driver/CUDA state
+            // surfaces here. Retry on CPU -- a bad model will fail there too.
+            result.gpuActive = false;
+            sessionOptions = Ort::SessionOptions();
+        }
+    }
+
     try {
         result.session = std::make_unique<Ort::Session>(sharedOrtEnv(), onnxPath.c_str(), sessionOptions);
     } catch (const Ort::Exception& e) {
         result.error = std::string("Failed to load ONNX model: ") + e.what();
         result.session.reset();
-        result.gpuActive = false;
     }
 
     return result;

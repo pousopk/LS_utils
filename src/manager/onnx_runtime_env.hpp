@@ -20,9 +20,9 @@ struct OrtSessionResult {
 };
 
 // Creates an ONNX Runtime session for `onnxPath`, attempting the CUDA
-// execution provider first. GPU failure (no compatible GPU/CUDA/cuDNN) is
-// never an error here -- it's caught and `gpuActive` is left false, and
-// the session is still created on CPU. Only a genuine session-creation
+// execution provider first. GPU failure (no compatible GPU/CUDA/cuDNN, or
+// a CUDA device that fails to initialise) is never an error here -- it's
+// caught, `gpuActive` is left false, and the session is created on CPU. Only a genuine session-creation
 // failure (missing/corrupt file, incompatible graph) sets `error` and
 // leaves `session` null.
 OrtSessionResult createOrtSession(const std::string& onnxPath);
