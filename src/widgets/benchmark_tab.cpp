@@ -11,6 +11,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -175,6 +176,30 @@ void drawRunBar(
     }
 }
 
+// A 0..1 value as a bar filling the cell's width, with the number drawn on
+// top in normal text color -- weak values stand out at a glance without
+// losing the exact figure. "--" when there's no value.
+void drawValueBar(std::optional<float> value) {
+    if (!value) {
+        ImGui::TextDisabled("--");
+        return;
+    }
+    const float fraction = std::clamp(*value, 0.0f, 1.0f);
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetTextLineHeight();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(start, ImVec2(start.x + width, start.y + height), ImGui::GetColorU32(ImGuiCol_FrameBg), 2.0f);
+    if (fraction > 0.0f) {
+        ImVec4 fill = ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram);
+        fill.w = 0.45f;
+        drawList->AddRectFilled(
+            start, ImVec2(start.x + width * fraction, start.y + height), ImGui::ColorConvertFloat4ToU32(fill), 2.0f);
+    }
+    ImGui::SetCursorScreenPos(ImVec2(start.x + 4.0f, start.y));
+    ImGui::Text("%.3f", *value);
+}
+
 void drawPerClassApTable(const BenchmarkState& state) {
     if (!ImGui::TreeNodeEx("Per-Class Metrics @0.5", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
@@ -202,7 +227,7 @@ void drawPerClassApTable(const BenchmarkState& state) {
     };
     const auto drawValue = [](std::optional<float> value) {
         ImGui::TableNextColumn();
-        value ? ImGui::Text("%.3f", *value) : ImGui::TextDisabled("--");
+        drawValueBar(value);
     };
     const auto drawSlotColumns = [&](const ClassAveragePrecision* c) {
         drawValue(c ? std::optional<float>(c->averagePrecision) : std::nullopt);
@@ -271,7 +296,7 @@ void drawConfusionMatrix(
     ImGui::BeginChild("Scroll", ImVec2(0, 220.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
     const int columns = static_cast<int>(labels.size()) + 1;
-    if (ImGui::BeginTable("Matrix", columns, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+    if (ImGui::BeginTable("Matrix", columns, ImGuiTableFlags_Borders)) {
         ImGui::TableSetupColumn("True \\ Pred");
         for (const auto& predictedLabel : labels) {
             ImGui::TableSetupColumn(predictedLabel.c_str());
@@ -283,6 +308,12 @@ void drawConfusionMatrix(
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(trueLabel.c_str());
             const auto trueRow = metrics.confusionMatrix.find(trueLabel);
+            int rowTotal = 0;
+            if (trueRow != metrics.confusionMatrix.end()) {
+                for (const auto& [predictedLabel, count] : trueRow->second) {
+                    rowTotal += count;
+                }
+            }
             for (size_t col = 0; col < labels.size(); ++col) {
                 const std::string& predictedLabel = labels[col];
                 ImGui::TableNextColumn();
@@ -297,11 +328,17 @@ void drawConfusionMatrix(
                     ImGui::TextDisabled("0");
                     continue;
                 }
+                // Shade by the cell's share of its true-label row: green on
+                // the diagonal (correct), red off it (confusions).
+                const float share = rowTotal > 0 ? static_cast<float>(count) / static_cast<float>(rowTotal) : 0.0f;
+                ImVec4 shade = predictedLabel == trueLabel ? kGoodColor : kBadColor;
+                shade.w = 0.12f + 0.5f * share;
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::ColorConvertFloat4ToU32(shade));
+
                 const bool selected = filters.confusionCell && filters.confusionCell->slotIndex == slotIndex
                     && filters.confusionCell->trueLabel == trueLabel
                     && filters.confusionCell->predictedLabel == predictedLabel;
                 ImGui::PushID(static_cast<int>(row * labels.size() + col));
-                ImGui::PushStyleColor(ImGuiCol_Text, predictedLabel == trueLabel ? kGoodColor : kBadColor);
                 if (ImGui::Selectable(std::to_string(count).c_str(), selected)) {
                     if (selected) {
                         filters.confusionCell.reset();
@@ -309,9 +346,10 @@ void drawConfusionMatrix(
                         filters.confusionCell = BenchmarkConfusionCellFilter{trueLabel, predictedLabel, slotIndex};
                     }
                 }
-                ImGui::PopStyleColor();
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Show images: %s predicted as %s", trueLabel.c_str(), predictedLabel.c_str());
+                    ImGui::SetTooltip(
+                        "%s predicted as %s: %d (%.0f%% of %s)\nClick to show these images.", trueLabel.c_str(),
+                        predictedLabel.c_str(), count, share * 100.0f, trueLabel.c_str());
                 }
                 ImGui::PopID();
             }
@@ -354,7 +392,117 @@ int countAnomalousImages(const BenchmarkResult& result) {
     return count;
 }
 
+// One headline card: a small caption, then one big value per model (the
+// better one in green when comparing two), then an optional detail line.
+// `values` holds the formatted value for each shown model; winner is the
+// index of the better one, or -1 for none.
+void drawStatCard(
+    const char* id, float width, const char* caption, const std::vector<std::string>& values, int winner,
+    const std::string& detail) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float bigSize = style.FontSizeBase * 1.8f;
+    const float height = ImGui::GetTextLineHeight() * 2.0f + bigSize + style.WindowPadding.y * 2.0f + style.ItemSpacing.y * 2.0f;
+    ImGui::BeginChild(id, ImVec2(width, height), ImGuiChildFlags_Borders);
+    ImGui::TextDisabled("%s", caption);
+    ImGui::PushFont(nullptr, bigSize);
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
+        }
+        if (values.size() > 1) {
+            ImGui::TextDisabled("%s", i == 0 ? "A" : "B");
+            ImGui::SameLine();
+        }
+        if (static_cast<int>(i) == winner) {
+            ImGui::TextColored(kGoodColor, "%s", values[i].c_str());
+        } else {
+            ImGui::TextUnformatted(values[i].c_str());
+        }
+    }
+    ImGui::PopFont();
+    if (!detail.empty()) {
+        ImGui::TextDisabled("%s", detail.c_str());
+    }
+    ImGui::EndChild();
+}
+
+std::string formatFloat(const char* format, double value) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), format, value);
+    return buffer;
+}
+
+// Index of the better of two values, or -1 if not comparing or tied.
+int betterSlot(const BenchmarkState& state, double a, double b, bool higherIsBetter) {
+    if (!state.compareTwoModels || a == b) {
+        return -1;
+    }
+    return (a > b) == higherIsBetter ? 0 : 1;
+}
+
+void drawHeadlineCards(const BenchmarkState& state) {
+    const int slotCount = state.compareTwoModels ? 2 : 1;
+    const BenchmarkResult* results[2] = {&state.resultA, &state.resultB};
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float cardWidth = (ImGui::GetContentRegionAvail().x - spacing * 2.0f) / 3.0f;
+
+    // Quality: mAP / accuracy / flagged count (none without ground truth).
+    std::vector<std::string> quality;
+    int qualityWinner = -1;
+    const char* qualityCaption = "";
+    std::string qualityDetail;
+    if (state.taskMode == ModelTask::Anomaly) {
+        qualityCaption = "Flagged anomalous";
+        for (int i = 0; i < slotCount; ++i) {
+            quality.push_back(
+                std::to_string(countAnomalousImages(*results[i])) + " / "
+                + std::to_string(results[i]->images.size()));
+        }
+    } else if (!state.hasGroundTruth) {
+        qualityCaption = state.taskMode == ModelTask::Detection ? "mAP@0.5" : "Accuracy";
+        quality.assign(static_cast<size_t>(slotCount), "--");
+        qualityDetail = "No ground truth";
+    } else if (state.taskMode == ModelTask::Detection) {
+        qualityCaption = "mAP@0.5";
+        const float values[2] = {state.detectionMetricsA.meanAveragePrecision, state.detectionMetricsB.meanAveragePrecision};
+        for (int i = 0; i < slotCount; ++i) {
+            quality.push_back(formatFloat("%.3f", values[i]));
+        }
+        qualityWinner = betterSlot(state, values[0], values[1], true);
+    } else {
+        qualityCaption = "Accuracy";
+        const float values[2] = {state.classificationMetricsA.accuracy, state.classificationMetricsB.accuracy};
+        for (int i = 0; i < slotCount; ++i) {
+            quality.push_back(formatFloat("%.1f%%", values[i] * 100.0));
+        }
+        qualityWinner = betterSlot(state, values[0], values[1], true);
+        qualityDetail = std::to_string(state.classificationMetricsA.totalEvaluated) + " with ground truth";
+    }
+    drawStatCard("CardQuality", cardWidth, qualityCaption, quality, qualityWinner, qualityDetail);
+
+    ImGui::SameLine();
+    std::string imagesDetail;
+    if (state.taskMode != ModelTask::Anomaly) {
+        imagesDetail = std::to_string(state.resultA.imagesWithGroundTruth) + " with ground truth";
+    }
+    drawStatCard(
+        "CardImages", cardWidth, "Images evaluated", {std::to_string(state.resultA.imagesFound)}, -1, imagesDetail);
+
+    ImGui::SameLine();
+    std::vector<std::string> speed;
+    std::string speedDetail = "P95";
+    for (int i = 0; i < slotCount; ++i) {
+        speed.push_back(formatFloat("%.1f ms", results[i]->timing.meanMs));
+        speedDetail += (i == 0 ? " " : " / ") + formatFloat("%.1f ms", results[i]->timing.p95Ms);
+    }
+    drawStatCard(
+        "CardSpeed", cardWidth, "Mean inference", speed,
+        betterSlot(state, state.resultA.timing.meanMs, state.resultB.timing.meanMs, false), speedDetail);
+}
+
 void drawAggregateMetrics(BenchmarkState& state) {
+    drawHeadlineCards(state);
+
     const int slotCount = state.compareTwoModels ? 2 : 1;
     if (!ImGui::BeginTable("BatchEvalMetrics", slotCount + 1, ImGuiTableFlags_Borders)) {
         return;
